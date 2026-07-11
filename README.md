@@ -1,1 +1,87 @@
-# BlackHorizon
+# Black Horizon
+
+Interactive black hole and orbital dynamics simulator. Stage 1: the core
+general-relativistic engine.
+
+This stage implements full Kerr (spinning black hole) physics: geodesics are
+integrated in horizon-penetrating Cartesian Kerr-Schild coordinates from a
+Hamiltonian formulation, with an adaptive Dormand-Prince 5(4) integrator,
+on the CPU (NumPy) or the GPU (CuPy) from the same code. It is validated
+end to end against exact general-relativistic results and ships a shadow
+ray tracer that renders the gravitationally lensed view of the hole.
+
+The full design, physics references and roadmap live in docs/DESIGN.md.
+Stage 2 (real-time ModernGL rendering), Stage 3 (accretion disk, tidal
+disruption events, post-Newtonian N-body) and Stage 4 (offline maximum
+fidelity renderer) build on this package.
+
+## Project layout
+
+    blackhorizon/
+        backend.py       NumPy/CuPy dispatch
+        kerr.py          Kerr spacetime, Kerr-Schild geometry, analytic radii
+        geodesics.py     Equations of motion, initial conditions, invariants
+        integrators.py   Batched RK4 and Dormand-Prince 5(4)
+        tracer.py        Adaptive ray propagation with termination
+        camera.py        Pinhole camera
+        imaging.py       Shadow image shading and PNG output
+        examples/
+            render_shadow.py
+            benchmark.py
+    tests/               Physics validation suite
+    docs/DESIGN.md       Design document (implementation anchor)
+
+## Setup (Manjaro Linux, PyCharm venv)
+
+With your venv activated in the project folder:
+
+    pip install -e ".[dev]"
+
+Optional GPU acceleration on the RTX 3070 (requires only the NVIDIA
+proprietary driver, which on Manjaro is installed via mhwd; verify with
+nvidia-smi):
+
+    pip install cupy-cuda12x
+
+## Run the validation suite
+
+    pytest
+
+The suite checks, among other things:
+
+- metric identities and the Schwarzschild limit of the Kerr-Schild form
+- analytic gradients against finite differences
+- conservation of E, L_z and the Hamiltonian through strong-field flybys
+- a photon riding the unstable circular orbit at r = 3M
+- a massive particle on a circular orbit at r = 6M around an a = 0.9 hole
+- the Schwarzschild shadow boundary at b = 3 sqrt(3) M within 0.5 percent
+- the Kerr (a = 0.9) prograde and retrograde shadow boundaries against
+  Bardeen's analytic critical impact parameters within 0.5 percent
+
+## Render a black hole shadow
+
+    python -m blackhorizon.examples.render_shadow --spin 0.9 --output shadow.png
+
+Useful flags: --inclination (degrees from the spin axis), --distance,
+--fov, --width, --height, --backend gpu. Captured photons form the black
+shadow; escaped photons sample a celestial checkerboard so the lensing and
+the frame-dragging asymmetry of the shadow are visible. Expect roughly one
+to two minutes on the CPU at 480x360; the GPU backend is much faster.
+
+## Benchmark
+
+    python -m blackhorizon.examples.benchmark
+
+Reports nanoseconds per ray-step for the raw geodesic integration on each
+available backend. Reference measurement of this Stage 1 array-based code
+on a container-class CPU: about 1700 ns per ray-step (float64). The GPU
+path and the planned raw-kernel port (see docs/DESIGN.md, section 3) exist
+precisely to close the gap to the sub-nanosecond figures published for
+native CUDA tracers.
+
+## Units and conventions
+
+Geometric units G = c = 1 with the black hole mass M = 1 setting the
+length scale. Metric signature (-, +, +, +). State arrays are (n, 8):
+(t, x, y, z, p_t, p_x, p_y, p_z) with covariant momenta. Spin a is in
+[-M, M]; the spin axis is +z.
