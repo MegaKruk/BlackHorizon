@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = ["cupy-cuda12x>=13"]
+realtime = ["moderngl>=5.10", "glfw>=2.6", "imgui-bundle>=1.5"]
 dev = ["pytest>=8"]
 
 [tool.setuptools.packages.find]

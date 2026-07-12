@@ -246,3 +246,43 @@ the same call signatures so new spacetimes and schemes drop in.
   Taichi and PyTorch are deliberately not load-bearing.
 - Model limits to document in-app: Novikov-Thorne invalid inside the ISCO,
   TDE prescriptions approximate, PN invalid in the strong field.
+
+## 9. Stage 2 addendum: real-time mode (implemented)
+
+Decisions taken, superseding open options above:
+
+- Tracing path: pure GLSL fragment shader (option chosen over CUDA-GL
+  interop). The shader in realtime/shaders/kerr_tracer.frag is a direct
+  transcription of the Stage 1 physics; a float64 NumPy mirror of its
+  exact algorithm lives in realtime/reference.py and is held to the
+  Stage 1 adaptive tracer by tests/test_realtime_reference.py.
+- Integration: fixed-order RK4 with the step heuristic
+  h = clip(step_scale * (r - r_plus), min_step, max_step), plus a
+  momentum-aware clamp h <= 1 / max(1, |p|). Two lessons learned and
+  encoded in tests: (a) past-directed rays entering the shadow asymptote
+  to the horizon with exponentially diverging blueshift, and the term
+  dp ~ grad_h (l.p)^2 makes fixed steps unstable there, so a diverging
+  momentum (|p| > momentum_bailout, default 1e3) is itself the capture
+  criterion; (b) the ring singularity guard must survive squaring in
+  float arithmetic (guard 1e-30, not 1e-300).
+- Measured preset accuracy against the Stage 1 adaptive tracer
+  (equatorial fans, both sides, distance 30 M): low/medium/high/ultra all
+  give 100 percent capture classification agreement at a = 0 and
+  a = 0.9. At a = 0.998: high and ultra remain exact, medium shows about
+  1 percent prograde boundary error, low about 6 percent.
+- Float32 sufficiency: the compiled GLSL agrees with the float64
+  reference on 100 percent of pixels in the headless test scenes
+  (tests/test_realtime_gl.py); per-ray FP64 promotion remains a Stage 4
+  concern only.
+- Stack: moderngl (context and offscreen target), glfw (window and
+  input), imgui-bundle (optional settings panel; the app degrades to
+  keyboard-only controls without it). Internal render resolution is
+  decoupled from the window via resolution_scale and blitted.
+
+Recorded benchmarks (RTX 3070, Manjaro, Python 3.14.5, 2026-07): batched
+CuPy array path 242.2 ns per ray-step float64, 77.7 ns float32,
+CPU NumPy 1376 ns; this confirmed the design prediction that the array
+path is kernel-launch bound and motivated the pure-shader tracer.
+Container reference: llvmpipe software GL renders 640x480 at the high
+preset in about 0.9 s, so the RTX 3070 has orders of magnitude of
+headroom for 1080p at 30 to 60 fps.

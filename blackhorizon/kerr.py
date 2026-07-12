@@ -23,8 +23,9 @@ from dataclasses import dataclass
 
 from .backend import Array, xp_of
 
-_TINY = 1e-300
-"""Guard against division by zero at the ring singularity."""
+_TINY = 1e-30
+"""Guard against division by zero at the ring singularity. Large enough
+that squaring a guarded quantity cannot underflow to zero in float64."""
 
 
 @dataclass(frozen=True)

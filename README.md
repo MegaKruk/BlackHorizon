@@ -18,6 +18,7 @@ fidelity renderer) build on this package.
 ## Project layout
 
     blackhorizon/
+        realtime/        Stage 2: GLSL tracer, engine, fly camera, app
         backend.py       NumPy/CuPy dispatch
         kerr.py          Kerr spacetime, Kerr-Schild geometry, analytic radii
         geodesics.py     Equations of motion, initial conditions, invariants
@@ -30,6 +31,40 @@ fidelity renderer) build on this package.
             benchmark.py
     tests/               Physics validation suite
     docs/DESIGN.md       Design document (implementation anchor)
+
+## Stage 2: real-time interactive mode
+
+The lensed black hole view is traced live, one geodesic per pixel, inside
+a GLSL fragment shader (a transcription of the validated Stage 1 physics;
+accuracy is enforced by tests against the adaptive tracer). Install the
+real-time extras and launch:
+
+    pip install -e ".[dev,realtime]"
+    python -m blackhorizon.realtime.app --spin 0.9
+
+Controls: WASD and Q/E to fly, right mouse drag to look, left shift to
+boost, R resets the camera, 1/2/3/4 select quality presets, B toggles the
+background, [ and ] nudge the spin, F12 saves a screenshot, Escape quits.
+If imgui-bundle is installed a settings panel exposes spin, field of
+view, step budget, and resolution scale; without it the keyboard
+controls above still work (start with --no-ui to force that mode).
+
+Useful flags: --quality low|medium|high|ultra, --distance, --inclination,
+--width, --height, --no-vsync (uncapped frame rate for benchmarking).
+
+To verify the GL path without opening a window, or to take stills:
+
+    python -m blackhorizon.realtime.headless --spin 0.9 --quality ultra --output frame.png
+
+Quality presets trade step budget for frame rate; their physical accuracy
+is quantified in docs/DESIGN.md section 9.
+
+Wayland note: the app automatically makes pyGLFW share imgui-bundle's
+GLFW library (see realtime/glfw_compat.py), because pyGLFW's Wayland-only
+build otherwise collides with imgui-bundle's X11-linked native module at
+import time. The window then runs through XWayland. To override the
+library choice, set PYGLFW_LIBRARY yourself; if the window fails to open,
+GLFW_PLATFORM=x11 remains a useful fallback.
 
 ## Setup (Manjaro Linux, PyCharm venv)
 
