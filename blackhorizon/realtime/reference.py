@@ -22,11 +22,20 @@ from .settings import RenderSettings
 
 @dataclass(frozen=True)
 class ReferenceResult:
-    """Classification of rays traced with the shader algorithm."""
+    """Classification of rays traced with the shader algorithm.
+
+    When a disk is configured, rays terminating on it carry
+    RayStatus.DISK, hit_radii holds their Kerr-Schild crossing radius,
+    and hit_positions / hit_momenta the linearly interpolated crossing
+    state, mirroring the shader exactly.
+    """
 
     status: numpy.ndarray
     positions: numpy.ndarray
     momenta: numpy.ndarray
+    hit_radii: numpy.ndarray | None = None
+    hit_positions: numpy.ndarray | None = None
+    hit_momenta: numpy.ndarray | None = None
 
 
 def trace_like_shader(
@@ -34,6 +43,7 @@ def trace_like_shader(
     state0: numpy.ndarray,
     settings: RenderSettings,
     escape_radius: float,
+    disk_radii: tuple[float, float] | None = None,
 ) -> ReferenceResult:
     """Trace rays exactly as the fragment shader does.
 
@@ -47,6 +57,9 @@ def trace_like_shader(
         state0: Initial (n, 8) states from geodesics.build_state.
         settings: Real-time settings supplying the heuristic parameters.
         escape_radius: Radius at which rays count as escaped.
+        disk_radii: Optional (inner, outer) disk radii; when given, an
+            opaque equatorial disk terminates crossing rays exactly as
+            the shader does.
 
     Returns:
         A ReferenceResult with final status, positions, and momenta.
@@ -57,6 +70,9 @@ def trace_like_shader(
     state = state0.copy()
     status = numpy.full((n,), int(RayStatus.MAX_STEPS), dtype=numpy.int32)
     active = numpy.ones((n,), dtype=bool)
+    hit_radii = numpy.full((n,), numpy.nan)
+    hit_positions = numpy.full((n, 3), numpy.nan)
+    hit_momenta = numpy.full((n, 4), numpy.nan)
 
     for _ in range(settings.max_steps):
         idx = numpy.nonzero(active)[0]
@@ -96,10 +112,37 @@ def trace_like_shader(
         k2 = geodesic_rhs(spacetime, y + 0.5 * hh * k1)
         k3 = geodesic_rhs(spacetime, y + 0.5 * hh * k2)
         k4 = geodesic_rhs(spacetime, y + hh * k3)
-        state[idx] = y + (hh / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+        y_new = y + (hh / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
+        if disk_radii is not None:
+            crossed = y[:, 3] * y_new[:, 3] < 0.0
+            if bool(crossed.any()):
+                t_cross = y[crossed, 3] / (
+                    y[crossed, 3] - y_new[crossed, 3]
+                )
+                interpolated = (
+                    y[crossed] + t_cross[:, None] * (y_new[crossed] - y[crossed])
+                )
+                r_hit = spacetime.kerr_schild_radius(
+                    interpolated[:, 1], interpolated[:, 2], interpolated[:, 3]
+                )
+                on_disk = (r_hit >= disk_radii[0]) & (r_hit <= disk_radii[1])
+                hit_local = numpy.zeros(y.shape[0], dtype=bool)
+                hit_local[numpy.nonzero(crossed)[0][on_disk]] = True
+                targets = idx[hit_local]
+                status[targets] = int(RayStatus.DISK)
+                active[targets] = False
+                hit_radii[targets] = r_hit[on_disk]
+                hit_positions[targets] = interpolated[on_disk][:, 1:4]
+                hit_momenta[targets] = interpolated[on_disk][:, 4:8]
+
+        state[idx] = y_new
 
     return ReferenceResult(
         status=status,
         positions=state[:, 1:4].copy(),
         momenta=state[:, 4:8].copy(),
+        hit_radii=hit_radii if disk_radii is not None else None,
+        hit_positions=hit_positions if disk_radii is not None else None,
+        hit_momenta=hit_momenta if disk_radii is not None else None,
     )

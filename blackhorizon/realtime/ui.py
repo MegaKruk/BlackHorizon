@@ -89,6 +89,31 @@ class SettingsPanel:
         if changed:
             settings.resolution_scale = value
 
+        imgui.separator()
+        changed, value = imgui.checkbox("accretion disk", settings.disk_enabled)
+        if changed:
+            settings.disk_enabled = value
+        changed, value = imgui.slider_float(
+            "disk outer r/M", settings.disk_outer_radius, 3.0, 40.0
+        )
+        if changed:
+            settings.disk_outer_radius = value
+        changed, value = imgui.slider_float(
+            "disk peak T (K)", settings.disk_temperature, 1000.0, 20000.0
+        )
+        if changed:
+            settings.disk_temperature = value
+        changed, value = imgui.slider_float(
+            "exposure", settings.exposure, 0.1, 5.0
+        )
+        if changed:
+            settings.exposure = value
+        changed, value = imgui.slider_float(
+            "disk detail", settings.disk_detail, 0.0, 1.0
+        )
+        if changed:
+            settings.disk_detail = value
+
         for preset in QualityPreset:
             if imgui.button(preset.value):
                 settings = settings.apply_preset(preset)

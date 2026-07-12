@@ -42,6 +42,12 @@ real-time extras and launch:
     pip install -e ".[dev,realtime]"
     python -m blackhorizon.realtime.app --spin 0.9
 
+The Novikov-Thorne accretion disk is on by default; the settings panel
+exposes its outer radius, peak temperature, exposure, tone detail, and
+an on/off toggle. Colors are physical: a blackbody palette shifted by
+the covariant redshift factor, so the approaching side beams hot and
+bright while the receding side dims and reddens.
+
 Controls: WASD and Q/E to fly, right mouse drag to look, left shift to
 boost, R resets the camera, 1/2/3/4 select quality presets, B toggles the
 background, [ and ] nudge the spin, F12 saves a screenshot, Escape quits.
@@ -120,3 +126,19 @@ Geometric units G = c = 1 with the black hole mass M = 1 setting the
 length scale. Metric signature (-, +, +, +). State arrays are (n, 8):
 (t, x, y, z, p_t, p_x, p_y, p_z) with covariant momenta. Spin a is in
 [-M, M]; the spin axis is +z.
+
+
+## Dynamics modules (Stage 3)
+
+- blackhorizon.dynamics.peters: gravitational-wave inspiral tracks
+  (Peters 1964), for example integrate_inspiral(1.0, 1.0, 60.0, 0.3).
+- blackhorizon.dynamics.pn_nbody: Newtonian, 1PN Einstein-Infeld-
+  Hoffmann, and 2.5PN radiation-reaction accelerations with an RK4
+  stepper, for comparable-mass systems outside the strong field.
+- blackhorizon.dynamics.tde: tidal disruption prescriptions and a
+  geodesic debris stream generator.
+
+Tidal disruption demo (writes top-down debris frames and the analytic
+fallback curve, no OpenGL needed):
+
+    python -m blackhorizon.examples.tde_demo --output-dir tde_frames

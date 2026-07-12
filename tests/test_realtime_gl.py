@@ -83,7 +83,7 @@ class TestShaderPipeline:
     def test_shader_matches_float64_reference(self, engine):
         """Per-pixel black classification agrees with the CPU reference."""
         width, height = 128, 96
-        settings = RenderSettings(spin=0.9).apply_preset(
+        settings = RenderSettings(spin=0.9, disk_enabled=False).apply_preset(
             QualityPreset.MEDIUM
         )
         camera = FlyCamera.from_orbit(30.0, 85.0)
@@ -113,7 +113,7 @@ class TestShaderPipeline:
     def test_zero_spin_shadow_is_symmetric(self, engine):
         """The Schwarzschild shadow is left-right symmetric on screen."""
         width, height = 128, 128
-        settings = RenderSettings(spin=0.0).apply_preset(
+        settings = RenderSettings(spin=0.0, disk_enabled=False).apply_preset(
             QualityPreset.MEDIUM
         )
         camera = FlyCamera.from_orbit(30.0, 90.0)
@@ -136,3 +136,56 @@ class TestShaderPipeline:
         assert engine.render_size(1280, 720, settings) == (640, 360)
         settings.resolution_scale = 1.0
         assert engine.render_size(1280, 720, settings) == (1280, 720)
+
+    def test_disk_mask_matches_reference(self, engine):
+        """Shader disk hits agree with the float64 reference mirror.
+
+        The shader mask is isolated by differencing disk-on and disk-off
+        frames, which changes exactly the pixels whose rays terminate on
+        the disk.
+        """
+        width, height = 128, 96
+        spin = 0.9
+        settings = RenderSettings(spin=spin, disk_enabled=True).apply_preset(
+            QualityPreset.HIGH
+        )
+        camera = FlyCamera.from_orbit(28.0, 80.0)
+        with_disk = engine.read_frame(settings, camera, width, height)
+        settings.disk_enabled = False
+        without_disk = engine.read_frame(settings, camera, width, height)
+        shader_disk = numpy.any(with_disk != without_disk, axis=-1)
+
+        spacetime = KerrSpacetime(mass=1.0, spin=spin)
+        inner = spacetime.isco_radius(prograde=True)
+        outer = max(settings.disk_outer_radius, inner + 1.0)
+        state0 = pixel_ray_states(spacetime, camera, settings, width, height)
+        settings.disk_enabled = True
+        reference = trace_like_shader(
+            spacetime,
+            state0,
+            settings,
+            settings.effective_escape_radius(camera.distance_from_origin),
+            disk_radii=(inner, outer),
+        )
+        reference_disk = (
+            reference.status == int(RayStatus.DISK)
+        ).reshape(height, width)
+        agreement = float(numpy.mean(shader_disk == reference_disk))
+        assert agreement >= 0.98, f"disk mask agreement {agreement:.4f}"
+
+    def test_disk_emission_is_colored_and_beamed(self, engine):
+        """Disk pixels carry blackbody color and Doppler asymmetry."""
+        width, height = 160, 100
+        settings = RenderSettings(
+            spin=0.9, disk_enabled=True, exposure=1.5
+        ).apply_preset(QualityPreset.MEDIUM)
+        settings.background = BackgroundMode.STARFIELD
+        camera = FlyCamera.from_orbit(28.0, 82.0)
+        image = engine.read_frame(settings, camera, width, height)
+        warm = (
+            image[:, :, 0].astype(int) - image[:, :, 2].astype(int)
+        ) > 15
+        assert warm.mean() > 0.05, "expect warm blackbody disk pixels"
+        left = float(image[:, : width // 2].mean())
+        right = float(image[:, width // 2 :].mean())
+        assert left > 1.5 * right, "approaching side must be beamed"

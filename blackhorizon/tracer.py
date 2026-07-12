@@ -26,6 +26,7 @@ class RayStatus(IntEnum):
     ESCAPED = 2
     MAX_STEPS = 3
     FAILED = 4
+    DISK = 5
 
 
 @dataclass(frozen=True)

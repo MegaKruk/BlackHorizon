@@ -286,3 +286,92 @@ path is kernel-launch bound and motivated the pure-shader tracer.
 Container reference: llvmpipe software GL renders 640x480 at the high
 preset in about 0.9 s, so the RTX 3070 has orders of magnitude of
 headroom for 1080p at 30 to 60 fps.
+
+
+## Stage 3 addendum: emission and dynamics (implemented)
+
+Stage 2 field acceptance: 97 fps at approximately 1281 x 872 on the
+ultra preset with the settings panel active (RTX 3070, driver 595.71.05),
+comfortably above the 30 fps design threshold.
+
+### What Stage 3 delivered
+
+Emission (blackhorizon/emission/):
+- novikov_thorne.py: closed-form Page and Thorne (1974) flux with the
+  x^3 - 3x + 2a = 0 root decomposition; the a = 0 removable singularity
+  (a root at x = 0) is handled by dropping the vanishing-coefficient
+  term. Zero-torque inner boundary at the ISCO; plunging-region emission
+  is neglected (documented limitation). Validated: F = 0 at the ISCO,
+  temperature peak at 9.55 M for a = 0 moving inward with spin, and the
+  large-radius Shakura-Sunyaev T ~ r^(-3/4) slope.
+- blackbody.py: Planck spectrum integrated against the CIE 1931 color
+  matching functions (Wyman, Sloan, Shirley 2013 Gaussian fits), XYZ to
+  linear sRGB, chromaticity-only lookup (brightness is applied as T^4 in
+  the shader). Validated colors: 2000 K strongly red, 6500 K near white,
+  20000 K strongly blue.
+- redshift.py: covariant g = nu_obs / nu_em for prograde circular
+  equatorial emitters in Kerr-Schild coordinates, float64 mirror of the
+  shader code. Validated against the exact face-on Schwarzschild result
+  g = sqrt(1 - 3M/r) to 0.2 percent through the full traced-ray chain.
+
+Real-time disk rendering:
+- The fragment shader detects equatorial plane crossings between
+  consecutive RK4 positions, interpolates the crossing linearly, and
+  terminates rays on the opaque disk (status 3). Emission combines the
+  T(r) lookup texture (unit 0), the blackbody chromaticity texture
+  (unit 1), the covariant redshift factor with the static-camera lapse,
+  a T^4 brightness law, optional procedural streaks, and Reinhard tone
+  mapping. Because a blackbody at T redshifts to a blackbody at g T,
+  the pair (color lookup at g T, brightness (g T)^4) captures the exact
+  g^4 bolometric scaling with no separate beaming factor.
+- The engine caches the temperature lookup texture keyed by (spin,
+  outer radius) and clamps the effective outer radius above the ISCO;
+  the static-observer lapse is clamped to 1 inside the ergosphere where
+  no static frame exists.
+- Cross-validation: the float64 reference mirror gained the identical
+  crossing detection; a GL test isolates the shader disk mask by
+  differencing disk-on and disk-off frames and requires at least 0.98
+  per-pixel agreement with the reference. A second GL test asserts warm
+  blackbody colors and at least 1.5x Doppler beaming asymmetry.
+
+Dynamics (blackhorizon/dynamics/):
+- peters.py: Peters (1964) orbit-averaged da/dt and de/dt with the
+  eccentricity enhancement factors, circular coalescence time, and an
+  adaptive RK4 track integrator. Validated against the closed form
+  a(t)^4 = a0^4 - (256/5) m1 m2 M t to 0.1 percent and the analytic
+  merger time to 2 percent.
+- pn_nbody.py: Newtonian plus 1PN Einstein-Infeld-Hoffmann n-body
+  accelerations (Newhall, Standish, Williams 1983 form, Newtonian
+  right-hand-side accelerations) and pairwise 2.5PN radiation reaction
+  in the Iyer-Will form a = (8/5)(m1 m2 / r^3)[(v.n) n (3 v^2 +
+  17 M / (3r)) - v (v^2 + 3 M / r)], distributed with mass-ratio
+  factors that keep the Newtonian center of mass inertial. Validated:
+  test-mass periapsis precession matches 6 pi M / (a (1 - e^2)) to
+  2 percent; circular secular decay matches the integrated Peters
+  closed form to 1 percent; eccentric e = 0.4 secular decay matches
+  the Peters enhancement to 1 percent. Note: the EIH equations are
+  Lorentz rather than Galilean invariant, so the Newtonian center of
+  mass is only conserved with 1PN off; the corresponding test targets
+  the radiation-reaction distribution.
+- tde.py: tidal radius, Hills mass, normalized fallback rate with the
+  t^(-5/3) full and t^(-9/4) partial disruption slopes, frozen-in
+  energy spread estimate, and a debris stream generator that launches
+  the star at the relativistically marginally bound speed (conserved
+  E = 1 exactly, found by bisection inside the local light cone) and
+  freezes particle orbits at pericenter into Stage 1 geodesic states.
+  Validated: bound fraction 0.50 for parabolic encounters, energy
+  spread consistent with M R / r_t^2, and debris Hamiltonians conserved
+  at -1/2 through 400 RK4 steps.
+
+### Stage 3 defaults
+
+Disk enabled, outer radius 18 M, peak temperature 6500 K, exposure 1.0
+(1.5 headless), detail 1.0. The headless renderer now defaults to the
+starfield background.
+
+### Deferred to Stage 4
+
+Offline maximum-fidelity rendering (bilinear-refined disk crossings,
+higher-order interpolation, FP64 promotion near the photon shell),
+video export, disk turbulence evolved in time, plunging-region
+emission, and debris self-gravity.

@@ -38,6 +38,18 @@ uniform float u_capture_margin;
 uniform float u_momentum_bailout;
 uniform int u_background_mode;
 
+uniform int u_disk_enabled;
+uniform float u_disk_inner_radius;
+uniform float u_disk_outer_radius;
+uniform float u_disk_peak_temperature;
+uniform float u_disk_detail;
+uniform float u_exposure;
+uniform float u_observer_lapse;
+uniform float u_bb_log_min;
+uniform float u_bb_log_max;
+uniform sampler2D u_temperature_lut;
+uniform sampler2D u_blackbody_lut;
+
 const float P_T = 1.0;
 
 // Kerr-Schild geometry at a spatial point: radius r, scalar H, spatial
@@ -160,6 +172,51 @@ vec3 initial_momentum(vec3 pos, vec3 dir) {
     return p / abs(p_t);
 }
 
+// Novikov-Thorne disk emission at an equatorial crossing point.
+// The redshift g combines gravitational shift, Doppler beaming and
+// aberration via g = nu_obs / nu_em with nu_em = -(p_phys . u_emitter);
+// for the past-directed traced momentum (p_t = +1) this reduces to
+// nu_em = u^t (1 + dot(p_spatial, v_circular)). A blackbody at T shifts
+// to a blackbody at g T with bolometric intensity scaling as g^4, which
+// the T^4 brightness factor below absorbs automatically.
+vec3 disk_emission(vec3 hit_pos, vec3 hit_p) {
+    Geometry g = evaluate_geometry(hit_pos);
+    float omega = 1.0 / (pow(g.r, 1.5) + u_spin);
+    vec3 v = omega * vec3(-hit_pos.y, hit_pos.x, 0.0);
+    float l_dot_v = 1.0 + dot(g.l, v);
+    float norm2 = -1.0 + dot(v, v) + 2.0 * g.h * l_dot_v * l_dot_v;
+    float u_t = inversesqrt(max(-norm2, 1e-9));
+    float nu_emitted = u_t * (1.0 + dot(hit_p, v));
+    float shift = u_observer_lapse / max(nu_emitted, 1e-6);
+
+    float lut_u = clamp(
+        (g.r - u_disk_inner_radius)
+            / (u_disk_outer_radius - u_disk_inner_radius),
+        0.0, 1.0
+    );
+    float t_norm = texture(u_temperature_lut, vec2(lut_u, 0.5)).r;
+    float t_observed = shift * t_norm * u_disk_peak_temperature;
+
+    float bb_u = clamp(
+        (log(max(t_observed, 1.0)) - u_bb_log_min)
+            / (u_bb_log_max - u_bb_log_min),
+        0.0, 1.0
+    );
+    vec3 tint = texture(u_blackbody_lut, vec2(bb_u, 0.5)).rgb;
+
+    float phi = atan(hit_pos.y, hit_pos.x);
+    float detail = 1.0 + u_disk_detail * (
+        0.18 * sin(9.0 * phi + 2.2 * g.r)
+        + 0.12 * sin(23.0 * phi - 5.0 * g.r)
+        + 0.15 * sin(3.5 * (g.r - u_disk_inner_radius))
+    );
+    float brightness = u_exposure
+        * pow(t_observed / 6500.0, 4.0)
+        * max(detail, 0.2);
+    vec3 color = tint * brightness;
+    return color / (1.0 + color);
+}
+
 float hash13(vec3 v) {
     v = fract(v * 0.1031);
     v += dot(v, v.zyx + 31.32);
@@ -202,6 +259,7 @@ void main() {
 
     int status = 0;
     vec3 dx_final = dir;
+    vec3 disk_color = vec3(0.0);
     for (int i = 0; i < MAX_STEPS; i++) {
         if (i >= u_max_steps) {
             break;
@@ -225,10 +283,30 @@ void main() {
         );
         // Bound the displacement of any RK stage for blueshifting rays.
         h_step = min(h_step, 1.0 / max(1.0, length(p)));
+        vec3 prev_pos = pos;
+        vec3 prev_p = p;
         rk4_step(pos, p, h_step);
+
+        // Opaque thin disk: detect an equatorial plane crossing between
+        // consecutive accepted positions, interpolate the crossing point
+        // linearly, and terminate the ray if it lies within the disk.
+        if (u_disk_enabled == 1 && prev_pos.z * pos.z < 0.0) {
+            float t_cross = prev_pos.z / (prev_pos.z - pos.z);
+            vec3 hit_pos = mix(prev_pos, pos, t_cross);
+            float r_hit = kerr_schild_radius(hit_pos);
+            if (r_hit >= u_disk_inner_radius
+                && r_hit <= u_disk_outer_radius) {
+                vec3 hit_p = mix(prev_p, p, t_cross);
+                disk_color = disk_emission(hit_pos, hit_p);
+                status = 3;
+                break;
+            }
+        }
     }
 
-    if (status == 2) {
+    if (status == 3) {
+        frag_color = vec4(disk_color, 1.0);
+    } else if (status == 2) {
         Geometry g = evaluate_geometry(pos);
         float lp = -P_T + dot(g.l, p);
         dx_final = normalize(p - 2.0 * g.h * lp * g.l);

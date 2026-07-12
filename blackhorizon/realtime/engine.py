@@ -15,6 +15,8 @@ import math
 import moderngl
 import numpy
 
+from ..emission.blackbody import blackbody_lut
+from ..emission.novikov_thorne import temperature_lut
 from ..kerr import KerrSpacetime
 from .fly_camera import FlyCamera
 from .settings import MAX_STEPS_HARD_LIMIT, RenderSettings
@@ -40,6 +42,14 @@ class KerrRenderEngine:
         self._color_texture: moderngl.Texture | None = None
         self._framebuffer: moderngl.Framebuffer | None = None
         self._size: tuple[int, int] = (0, 0)
+        self._temperature_texture: moderngl.Texture | None = None
+        self._temperature_key: tuple[float, float] | None = None
+        self._disk_inner: float = 0.0
+        bb_table, self._bb_log_min, self._bb_log_max = blackbody_lut()
+        self._blackbody_texture = ctx.texture(
+            (bb_table.shape[0], 1), 3, bb_table.tobytes(), dtype="f4"
+        )
+        self._blackbody_texture.filter = (moderngl.LINEAR, moderngl.LINEAR)
 
     def release(self) -> None:
         """Free all GPU resources owned by the engine."""
@@ -48,6 +58,10 @@ class KerrRenderEngine:
             self._color_texture.release()
             self._framebuffer = None
             self._color_texture = None
+        if self._temperature_texture is not None:
+            self._temperature_texture.release()
+            self._temperature_texture = None
+        self._blackbody_texture.release()
         self.vao.release()
         self.program.release()
 
@@ -70,11 +84,59 @@ class KerrRenderEngine:
         )
         self._size = (width, height)
 
+    def _effective_disk_radii(
+        self, spacetime: KerrSpacetime, settings: RenderSettings
+    ) -> tuple[float, float]:
+        """Inner (ISCO) and clamped outer disk radii for the frame."""
+        inner = spacetime.isco_radius(prograde=True)
+        outer = max(settings.disk_outer_radius, inner + 1.0)
+        return inner, outer
+
+    def _ensure_temperature_lut(
+        self, spacetime: KerrSpacetime, settings: RenderSettings
+    ) -> None:
+        """(Re)build the T(r) lookup texture when spin or size change."""
+        inner, outer = self._effective_disk_radii(spacetime, settings)
+        key = (round(spacetime.spin, 4), round(outer, 3))
+        if key == self._temperature_key:
+            return
+        table, r_inner, _ = temperature_lut(spacetime.spin, outer)
+        if self._temperature_texture is not None:
+            self._temperature_texture.release()
+        self._temperature_texture = self.ctx.texture(
+            (table.shape[0], 1), 1, table.tobytes(), dtype="f4"
+        )
+        self._temperature_texture.filter = (
+            moderngl.LINEAR,
+            moderngl.LINEAR,
+        )
+        self._temperature_key = key
+        self._disk_inner = r_inner
+
+    def _observer_lapse(
+        self, spacetime: KerrSpacetime, camera: FlyCamera
+    ) -> float:
+        """Static-observer lapse at the camera, clamped inside the
+        ergosphere where no static frame exists."""
+        geo = spacetime.geometry(
+            numpy.asarray([camera.position[0]]),
+            numpy.asarray([camera.position[1]]),
+            numpy.asarray([camera.position[2]]),
+        )
+        g_tt = 2.0 * float(geo.h[0]) - 1.0
+        if g_tt >= -1e-3:
+            return 1.0
+        return 1.0 / math.sqrt(-g_tt)
+
     def _set_uniforms(
         self, settings: RenderSettings, camera: FlyCamera, aspect: float
     ) -> None:
         """Push all shader uniforms for the current frame."""
         spacetime = KerrSpacetime(mass=1.0, spin=settings.spin)
+        self._ensure_temperature_lut(spacetime, settings)
+        inner, outer = self._effective_disk_radii(spacetime, settings)
+        self._temperature_texture.use(location=0)
+        self._blackbody_texture.use(location=1)
         forward, right, up = camera.basis()
         uniforms = {
             "u_cam_position": tuple(camera.position.astype(numpy.float32)),
@@ -97,6 +159,17 @@ class KerrRenderEngine:
             "u_capture_margin": settings.capture_margin,
             "u_momentum_bailout": settings.momentum_bailout,
             "u_background_mode": int(settings.background),
+            "u_disk_enabled": 1 if settings.disk_enabled else 0,
+            "u_disk_inner_radius": inner,
+            "u_disk_outer_radius": outer,
+            "u_disk_peak_temperature": settings.disk_temperature,
+            "u_disk_detail": settings.disk_detail,
+            "u_exposure": settings.exposure,
+            "u_observer_lapse": self._observer_lapse(spacetime, camera),
+            "u_bb_log_min": self._bb_log_min,
+            "u_bb_log_max": self._bb_log_max,
+            "u_temperature_lut": 0,
+            "u_blackbody_lut": 1,
         }
         for name, value in uniforms.items():
             self.program[name].value = value

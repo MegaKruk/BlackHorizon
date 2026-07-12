@@ -75,6 +75,14 @@ class RenderSettings:
             blueshift; see momentum_bailout.
         escape_radius: Radius at which rays sample the background. If not
             positive, the engine derives it from the camera distance.
+        disk_enabled: Whether the Novikov-Thorne disk is rendered.
+        disk_outer_radius: Outer disk edge in units of M. The engine
+            clamps the effective value above the spin-dependent ISCO.
+        disk_temperature: Peak effective temperature of the disk in
+            Kelvin; sets the emitted color palette before redshift.
+        disk_detail: Strength of the procedural brightness streaks in
+            [0, 1]; purely cosmetic.
+        exposure: Linear brightness multiplier before tone mapping.
         momentum_bailout: Spatial momentum magnitude above which a ray
             is classified as captured. Past-directed rays entering the
             shadow blueshift without bound as they asymptote to the
@@ -94,6 +102,11 @@ class RenderSettings:
     escape_radius: float = 0.0
     momentum_bailout: float = 1e3
     background: BackgroundMode = BackgroundMode.CHECKERBOARD
+    disk_enabled: bool = True
+    disk_outer_radius: float = 18.0
+    disk_temperature: float = 6500.0
+    disk_detail: float = 1.0
+    exposure: float = 1.0
 
     def validate(self) -> None:
         """Raise ValueError if any field is outside its legal range."""
@@ -115,6 +128,14 @@ class RenderSettings:
             raise ValueError("capture_margin must be non-negative")
         if self.momentum_bailout <= 1.0:
             raise ValueError("momentum_bailout must exceed 1")
+        if self.disk_outer_radius <= 1.0:
+            raise ValueError("disk_outer_radius must exceed 1 M")
+        if not 500.0 <= self.disk_temperature <= 40000.0:
+            raise ValueError("disk_temperature must be in [500, 40000] K")
+        if not 0.0 <= self.disk_detail <= 1.0:
+            raise ValueError("disk_detail must be in [0, 1]")
+        if self.exposure <= 0.0:
+            raise ValueError("exposure must be positive")
 
     def apply_preset(self, preset: QualityPreset) -> "RenderSettings":
         """Return a copy of the settings with a quality preset applied."""

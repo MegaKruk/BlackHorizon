@@ -68,8 +68,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--background", choices=("checkerboard", "starfield"),
-        default="checkerboard",
+        default="starfield",
     )
+    parser.add_argument("--no-disk", action="store_true")
+    parser.add_argument("--disk-outer", type=float, default=18.0)
+    parser.add_argument("--disk-temperature", type=float, default=6500.0)
+    parser.add_argument("--exposure", type=float, default=1.5)
     parser.add_argument("--output", type=str, default="frame.png")
     args = parser.parse_args()
 
@@ -80,6 +84,10 @@ def main() -> None:
         background=BackgroundMode.CHECKERBOARD
         if args.background == "checkerboard"
         else BackgroundMode.STARFIELD,
+        disk_enabled=not args.no_disk,
+        disk_outer_radius=args.disk_outer,
+        disk_temperature=args.disk_temperature,
+        exposure=args.exposure,
     ).apply_preset(QualityPreset(args.quality))
     settings.resolution_scale = 1.0
     camera = FlyCamera.from_orbit(args.distance, args.inclination)
