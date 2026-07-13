@@ -16,7 +16,7 @@ import moderngl
 import numpy
 
 from ..emission.blackbody import blackbody_lut
-from ..emission.novikov_thorne import temperature_lut
+from ..emission.novikov_thorne import disk_inner_radius, temperature_lut
 from ..kerr import KerrSpacetime
 from .fly_camera import FlyCamera
 from .settings import MAX_STEPS_HARD_LIMIT, RenderSettings
@@ -88,7 +88,7 @@ class KerrRenderEngine:
         self, spacetime: KerrSpacetime, settings: RenderSettings
     ) -> tuple[float, float]:
         """Inner (ISCO) and clamped outer disk radii for the frame."""
-        inner = spacetime.isco_radius(prograde=True)
+        inner = disk_inner_radius(spacetime)
         outer = max(settings.disk_outer_radius, inner + 1.0)
         return inner, outer
 

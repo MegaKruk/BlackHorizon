@@ -4,6 +4,7 @@ import numpy
 
 from blackhorizon.emission.blackbody import blackbody_lut, blackbody_rgb
 from blackhorizon.emission.novikov_thorne import (
+    disk_inner_radius,
     page_thorne_flux,
     peak_temperature_radius,
     temperature_lut,
@@ -62,6 +63,33 @@ class TestNovikovThorne:
         assert peak_temperature_radius(0.9) < peak_temperature_radius(0.0)
         # Schwarzschild peak sits near the classic 9.55 M.
         assert abs(peak_temperature_radius(0.0) - 9.55) < 0.2
+
+    def test_full_spin_range_produces_valid_luts(self):
+        """Every slider-reachable spin yields a finite normalized LUT.
+
+        Regression test: negative spins once fed the prograde ISCO to
+        the signed-a Page-Thorne form, zeroing the profile and crashing
+        the real-time app when the spin slider moved.
+        """
+        for spin in numpy.arange(-0.998, 0.999, 0.037):
+            spin = float(spin)
+            inner = disk_inner_radius(KerrSpacetime(spin=spin))
+            table, r_in, _ = temperature_lut(spin, max(18.0, inner + 1.0))
+            assert bool(numpy.isfinite(table).all()), f"spin {spin}"
+            assert abs(float(table.max()) - 1.0) < 1e-6, f"spin {spin}"
+            assert abs(r_in - inner) < 1e-12
+
+    def test_retrograde_disk_less_efficient(self):
+        """Counter-rotating disks truncate farther out and peak
+        farther out: the classic spin-efficiency ordering."""
+        st_retro = KerrSpacetime(spin=-0.9)
+        st_pro = KerrSpacetime(spin=0.9)
+        assert disk_inner_radius(st_retro) > 6.0 > disk_inner_radius(st_pro)
+        assert (
+            peak_temperature_radius(-0.9)
+            > peak_temperature_radius(0.0)
+            > peak_temperature_radius(0.9)
+        )
 
     def test_lut_normalized(self):
         table, r_in, r_out = temperature_lut(0.9, 18.0, size=128)

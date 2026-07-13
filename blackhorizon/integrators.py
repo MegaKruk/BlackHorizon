@@ -172,3 +172,36 @@ def integrate_dense(
         if h_scalar < 1e-14:
             raise RuntimeError("integrate_dense: step size underflow")
     return states
+
+
+def implicit_midpoint_step(
+    rhs: Rhs,
+    state: Array,
+    h: Array,
+    iterations: int = 4,
+) -> Array:
+    """One implicit midpoint step, symplectic for Hamiltonian flows.
+
+    Solves y1 = y0 + h f((y0 + y1) / 2) by fixed-point iteration seeded
+    with an explicit Euler half step. The midpoint rule is second order
+    and symplectic, so the geodesic Hamiltonian shows bounded
+    oscillation instead of the secular drift of explicit Runge-Kutta
+    methods; use it for long orbital evolutions (debris streams,
+    many-orbit trajectories) where energy fidelity over tens of
+    thousands of steps matters more than order.
+
+    Args:
+        rhs: Derivative function mapping states (n, 8) to derivatives.
+        state: Current states, shape (n, 8).
+        h: Per-ray step sizes, shape (n,).
+        iterations: Fixed-point iterations; four suffice for the step
+            sizes used in practice (h well below the orbital timescale).
+
+    Returns:
+        Advanced states, shape (n, 8).
+    """
+    hh = h[:, None]
+    midpoint = state + 0.5 * hh * rhs(state)
+    for _ in range(iterations):
+        midpoint = state + 0.5 * hh * rhs(midpoint)
+    return state + hh * rhs(midpoint)

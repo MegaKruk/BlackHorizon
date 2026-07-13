@@ -24,48 +24,86 @@ from ..integrators import rk4_step
 from ..kerr import KerrSpacetime
 
 
-def render_topdown(
+def _splat_kernel(radius: int = 3, sigma: float = 1.3) -> numpy.ndarray:
+    """Small Gaussian footprint used to draw each particle."""
+    x = numpy.arange(-radius, radius + 1)
+    xx, yy = numpy.meshgrid(x, x)
+    kernel = numpy.exp(-(xx**2 + yy**2) / (2.0 * sigma**2))
+    return kernel / kernel.max()
+
+
+def deposit_splats(
+    trail: numpy.ndarray,
     positions: numpy.ndarray,
     energies: numpy.ndarray,
-    spacetime: KerrSpacetime,
     extent: float,
-    size: int = 720,
-) -> numpy.ndarray:
-    """Scatter debris onto a top-down image of the equatorial region.
+) -> None:
+    """Add particle splats onto the trail buffer in place.
 
-    Bound particles render warm (orange), unbound ones cool (blue); the
-    horizon is drawn as a filled dark disk with a thin marker ring.
+    Bound particles deposit warm (orange), unbound cool (blue), as
+    additive Gaussian footprints. Called several times per output frame
+    so moving particles paint continuous streaks instead of dots.
 
     Args:
+        trail: Accumulation buffer, shape (size, size, 3), modified.
         positions: Particle positions, shape (n, 3).
         energies: Conserved specific energies, shape (n,).
+        extent: Half-width of the imaged square in units of M.
+    """
+    size = trail.shape[0]
+    kernel = _splat_kernel()
+    pad = kernel.shape[0] // 2
+    scale = size / (2.0 * extent)
+    px = ((positions[:, 0] + extent) * scale).astype(int)
+    py = ((extent - positions[:, 1]) * scale).astype(int)
+    inside = (
+        (px >= pad)
+        & (px < size - pad)
+        & (py >= pad)
+        & (py < size - pad)
+    )
+    bound = energies < 1.0
+    warm = numpy.array([1.0, 0.55, 0.15])
+    cool = numpy.array([0.3, 0.55, 1.0])
+    for x, y, is_bound in zip(px[inside], py[inside], bound[inside]):
+        tint = warm if is_bound else cool
+        trail[
+            y - pad : y + pad + 1, x - pad : x + pad + 1
+        ] += kernel[:, :, None] * tint[None, None, :]
+
+
+def compose_frame(
+    trail: numpy.ndarray,
+    spacetime: KerrSpacetime,
+    extent: float,
+) -> numpy.ndarray:
+    """Develop the trail buffer into a display frame.
+
+    Brightness auto-normalizes to the buffer's 99.5th percentile under
+    an asinh stretch, astronomy's usual trick for high dynamic range;
+    the horizon is a filled dark disk with a marker ring.
+
+    Args:
+        trail: Accumulation buffer, shape (size, size, 3).
         spacetime: The Kerr spacetime, for the horizon radius.
         extent: Half-width of the imaged square in units of M.
-        size: Image size in pixels.
 
     Returns:
         RGB image array of shape (size, size, 3), dtype uint8.
     """
-    image = numpy.zeros((size, size, 3), dtype=numpy.float64)
+    size = trail.shape[0]
     scale = size / (2.0 * extent)
-    px = ((positions[:, 0] + extent) * scale).astype(int)
-    py = ((extent - positions[:, 1]) * scale).astype(int)
-    inside = (px >= 0) & (px < size) & (py >= 0) & (py < size)
-    bound = energies < 1.0
-    warm = numpy.array([1.0, 0.55, 0.15])
-    cool = numpy.array([0.25, 0.5, 1.0])
-    for x, y, is_bound in zip(px[inside], py[inside], bound[inside]):
-        image[y, x] += warm if is_bound else cool
-
-    # Soft brightness roll-off where particles pile up.
-    image = 255.0 * image / (1.0 + image)
+    peak = numpy.percentile(trail.max(axis=-1), 99.5)
+    normalized = trail / max(peak, 1e-9)
+    stretched = numpy.arcsinh(6.0 * normalized) / numpy.arcsinh(6.0)
+    image = 255.0 * numpy.clip(stretched, 0.0, 1.0)
 
     yy, xx = numpy.mgrid[0:size, 0:size]
     radius = numpy.hypot(xx - size / 2.0, yy - size / 2.0) / scale
     horizon = spacetime.outer_horizon_radius
     image[radius <= horizon] = 8.0
-    ring = numpy.abs(radius - horizon) < (1.5 / scale)
-    image[ring] = numpy.array([90.0, 90.0, 110.0])
+    ring = numpy.abs(radius - horizon) < max(1.5 / scale, 1.0)
+    image[ring] = numpy.array([110.0, 110.0, 135.0])
     return image.astype(numpy.uint8)
 
 
@@ -78,7 +116,21 @@ def main() -> None:
     parser.add_argument("--particles", type=int, default=3000)
     parser.add_argument("--frames", type=int, default=8)
     parser.add_argument("--steps-per-frame", type=int, default=800)
+    parser.add_argument(
+        "--deposits-per-frame",
+        type=int,
+        default=8,
+        help="trail deposits per frame; more paints smoother streaks",
+    )
     parser.add_argument("--proper-time-step", type=float, default=0.6)
+    parser.add_argument(
+        "--extent",
+        type=float,
+        default=5.0,
+        help="half-width of the view in tidal radii; fixed so the "
+        "trail buffer and any encoded video stay geometrically "
+        "consistent",
+    )
     parser.add_argument("--output-dir", type=str, default="tde_frames")
     args = parser.parse_args()
 
@@ -99,26 +151,37 @@ def main() -> None:
 
     state = stream.states
     step = numpy.full((state.shape[0],), args.proper_time_step)
-    extent = stream.tidal_radius * 3.0
 
     def rhs(batch: numpy.ndarray) -> numpy.ndarray:
         return geodesic_rhs(spacetime, batch)
 
+    size = 720
+    trail = numpy.zeros((size, size, 3), dtype=numpy.float64)
+    extent = args.extent * stream.tidal_radius
+    frame_decay = 0.80
+    deposits = max(1, args.deposits_per_frame)
+    decay_per_deposit = frame_decay ** (1.0 / deposits)
+    chunk = max(1, args.steps_per_frame // deposits)
+
     for frame in range(args.frames):
-        image = render_topdown(
-            state[:, 1:4], stream.specific_energies, spacetime, extent
-        )
+        for _ in range(deposits):
+            trail *= decay_per_deposit
+            deposit_splats(
+                trail, state[:, 1:4], stream.specific_energies, extent
+            )
+            for _ in range(chunk):
+                state = rk4_step(rhs, state, step)
+        image = compose_frame(trail, spacetime, extent)
         path = output_dir / f"tde_{frame:03d}.png"
         save_png(image, str(path))
-        radii = spacetime.kerr_schild_radius(
+        radii_now = spacetime.kerr_schild_radius(
             state[:, 1], state[:, 2], state[:, 3]
         )
         print(
-            f"frame {frame}: median r = {float(numpy.median(radii)):.1f} M "
-            f"-> {path}"
+            f"frame {frame}: median r = "
+            f"{float(numpy.median(radii_now)):.1f} M, "
+            f"view half-width {extent:.0f} M -> {path}"
         )
-        for _ in range(args.steps_per_frame):
-            state = rk4_step(rhs, state, step)
 
     # Analytic fallback light curve for the bound debris.
     times = numpy.geomspace(1.0, 300.0, 200)

@@ -35,12 +35,29 @@ class FlyCamera:
 
     @classmethod
     def from_orbit(
-        cls, distance: float, inclination_degrees: float, **kwargs
+        cls,
+        distance: float,
+        inclination_degrees: float,
+        azimuth_degrees: float = 0.0,
+        **kwargs,
     ) -> "FlyCamera":
-        """Place the camera on a sphere around the origin, looking at it."""
+        """Place the camera on a sphere around the origin, looking at it.
+
+        Args:
+            distance: Radius of the orbit in units of M.
+            inclination_degrees: Polar angle from the spin axis; 90 is
+                edge-on with the equatorial plane.
+            azimuth_degrees: Angle around the spin axis, for orbital
+                camera paths.
+        """
         inc = math.radians(inclination_degrees)
+        az = math.radians(azimuth_degrees)
         position = numpy.array(
-            [distance * math.sin(inc), 0.0, distance * math.cos(inc)]
+            [
+                distance * math.sin(inc) * math.cos(az),
+                distance * math.sin(inc) * math.sin(az),
+                distance * math.cos(inc),
+            ]
         )
         camera = cls(position=position, **kwargs)
         camera.look_at(numpy.zeros(3))

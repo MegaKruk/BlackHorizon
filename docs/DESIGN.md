@@ -375,3 +375,127 @@ Offline maximum-fidelity rendering (bilinear-refined disk crossings,
 higher-order interpolation, FP64 promotion near the photon shell),
 video export, disk turbulence evolved in time, plunging-region
 emission, and debris self-gravity.
+
+
+## Stage 4 addendum: offline rendering, video, symplectic integration (implemented)
+
+### Offline maximum-fidelity renderer (blackhorizon/offline/render.py)
+
+The authoritative image path, which the real-time GLSL renderer
+approximates:
+- Float64 adaptive Dormand-Prince 5(4) tracing (first pass rtol 1e-9),
+  array-module generic so the gpu backend (CuPy) accelerates it; rays
+  are traced in memory-bounded tiles.
+- Disk crossings are localized by bisection: from the pre-step state, a
+  fractional Runge-Kutta substep samples the same trajectory at fourth
+  order, and forty bisections pin the equatorial crossing to a 1e-12
+  fraction of the accepted step, replacing the real-time renderer's
+  linear interpolation. Rays whose refined radius misses the annulus
+  correctly continue through the inner gap or past the rim.
+- Photon-shell fidelity ladder: rays that consume most of the step
+  budget (they wind near the photon shell where trajectories are
+  exponentially sensitive) are retraced with rtol 1e-11 and a
+  quadrupled budget before classification. This realizes the design
+  goal of promoted precision near the shell; the pipeline is float64
+  end to end, so the promotion is in tolerance rather than word size.
+- Subpixel supersampling on a regular grid (default 2x2 per pixel),
+  averaged after shading.
+- Emission is linear HDR: the Page-Thorne temperature profile and the
+  covariant redshift factor as in Stage 3 but with a 2048-entry
+  temperature table and a 1024-entry blackbody table interpolated in
+  float64, plus a deterministic HDR starfield with hash-placed
+  blackbody-tinted stars and a faint galactic band.
+- Development happens in post (blackhorizon/offline/post.py): bloom as
+  a thresholded bright pass under a separable Gaussian, the ACES filmic
+  tone curve (Narkowicz 2015 fit), and exact sRGB encoding.
+
+Validated by tests: shadow, disk, and HDR-exceeding highlights present
+in a rendered frame; bit-exact determinism across runs; supersampling
+strictly reduces edge gradient energy; post-processing properties
+(bloom only brightens and ignores sub-threshold pixels, ACES is
+monotonic and bounded, blur preserves the mean).
+
+### Camera paths and video (blackhorizon/offline/camera_path.py, video.py)
+
+Keyframed orbital camera paths (distance, inclination, azimuth, field
+of view) with smoothstep easing; azimuth interpolates unwrapped so
+multi-revolution orbits are single segments. Video rendering drives the
+real-time GLSL engine headlessly along a path at a supersampling
+multiple of the target resolution, box-downsamples, applies a light
+per-frame bloom, and encodes H.264 through imageio-ffmpeg (the "video"
+optional extra). A frames-to-mp4 utility encodes existing PNG
+sequences, including the TDE demo output. The maximum-fidelity float64
+path remains the tool for hero stills; the GLSL path keeps a full
+orbit affordable.
+
+### Symplectic integration (integrators.implicit_midpoint_step)
+
+The implicit midpoint rule, solved by fixed-point iteration, is second
+order and symplectic for the geodesic Hamiltonian flow. At large fixed
+steps over tens of thousands of steps the RK4 Hamiltonian error grows
+strictly monotonically (secular drift) while the midpoint error
+oscillates and returns, staying bounded; both behaviors are asserted
+by tests, along with second-order convergence. Use it for long orbital
+evolutions such as debris streams; adaptive Dormand-Prince remains the
+tool for imaging rays. A fully explicit Kerr-split symplectic scheme
+(Wu et al. 2021) remains future work; the implicit midpoint rule
+provides the structure preservation the design called for with a
+simple, testable construction.
+
+### TDE demo rendering
+
+Particles now draw as additive Gaussian splats with a fading trail
+buffer and a fixed field of view (default five tidal radii, CLI
+--extent) so trails and encoded videos stay geometrically consistent;
+frame brightness auto-normalizes to its 99.5th percentile under an
+asinh stretch. Encode the frames with:
+python -m blackhorizon.offline.video --encode-frames tde_frames
+--fps 12 --output tde.mp4
+
+### Performance notes
+
+Container reference (CPU, float64): 160x100 at supersample 1 renders in
+about 10 seconds; cost scales linearly in rays. The gpu backend runs
+the same tracing loop on CuPy (measured in Stage 1 at roughly 5.7x the
+CPU ray-step rate in float64 on the RTX 3070). Video via the GLSL
+engine renders full frames in milliseconds on native hardware.
+
+
+## Stage 4 field acceptance (user hardware, RTX 3070)
+
+- Full test suite: 103 passed in 52 s.
+- Offline hero frame, 1920 x 1200 at supersample 2 (9.2 million float64
+  rays), gpu backend: 1669 s. The throughput dip between roughly 25 and
+  50 percent of the rays is the tile band whose rays wind near the
+  photon shell: they take the most adaptive steps and trigger the
+  tolerance-tightening refinement pass, and the shrinking active set
+  underutilizes the GPU until the band passes.
+- Orbit video, 300 frames at 1280 x 720, ultra preset, supersample 2
+  (2560 x 1440 renders downsampled): 150 s total, 2 frames per second
+  including H.264 encoding.
+
+## Stage 4 bug fix: disk orbit convention for negative spin
+
+The disk co-rotates in +phi everywhere in the pipeline (its angular
+velocity is Omega = 1 / (r^(3/2) + a)), but the inner edge was taken
+from isco_radius(prograde=True), which means co-rotating with the hole.
+For negative spin the +phi orbits are retrograde relative to the hole,
+so the signed-a Page-Thorne bracket received the wrong x0 and clamped
+to zero over a band of negative spins, crashing the real-time app when
+the spin slider swept through them. The fix is the shared helper
+emission.novikov_thorne.disk_inner_radius, which selects the ISCO
+branch of the +phi orbits; the engine, the offline renderer, and the
+profile functions all use it. Regression tests sweep the full slider
+range for finite normalized tables and assert the physical efficiency
+ordering: retrograde disks truncate and peak farther out (peak radius
+14.1 M at a = -0.9 versus 9.55 M at a = 0 versus 3.44 M at a = +0.9).
+
+## Stage 4 polish
+
+- blackhorizon.offline imports its submodules lazily (PEP 562), so
+  python -m blackhorizon.offline.render no longer trips runpy's
+  double-import warning.
+- The TDE demo deposits particle splats into the fading trail buffer
+  several times per output frame (--deposits-per-frame, default 8), so
+  fast-moving debris paints continuous streaks instead of disconnected
+  dots at video frame spacing.

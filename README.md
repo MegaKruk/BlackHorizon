@@ -142,3 +142,27 @@ Tidal disruption demo (writes top-down debris frames and the analytic
 fallback curve, no OpenGL needed):
 
     python -m blackhorizon.examples.tde_demo --output-dir tde_frames
+
+
+## Offline rendering and video (Stage 4)
+
+Maximum-fidelity still (float64 adaptive tracing, bisection-refined
+disk crossings, photon-shell refinement, supersampling, bloom):
+
+    python -m blackhorizon.offline.render --spin 0.9 --width 1920 \
+        --height 1200 --supersample 2 --backend gpu --output hero.png
+
+Use --backend cpu without CuPy; --hdr-output saves the linear frame as
+.npy for regrading. Orbit video through the real-time engine (install
+the video extra first: pip install -e ".[video]"):
+
+    python -m blackhorizon.offline.video --seconds 10 --fps 30 \
+        --width 1280 --height 720 --quality ultra --output orbit.mp4
+
+Encode existing PNG frames (for example the TDE demo output):
+
+    python -m blackhorizon.offline.video --encode-frames tde_frames \
+        --fps 12 --output tde.mp4
+
+For long orbital evolutions, integrators.implicit_midpoint_step is a
+symplectic alternative to RK4 with bounded long-term energy error.

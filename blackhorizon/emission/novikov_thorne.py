@@ -8,6 +8,13 @@ normalization is a free scale in this simulator (the peak temperature is
 a user-facing parameter), so the profile functions return shapes, not
 Kelvin. Geometric units G = c = M = 1; radii in units of M.
 
+The disk co-rotates in the +phi coordinate direction, matching the
+orbital velocity Omega = 1 / (r^(3/2) + a) used by the renderer and the
+redshift module. For negative spin those orbits are retrograde relative
+to the hole, so the inner edge is the retrograde ISCO and the signed-a
+Page-Thorne form applies; retrograde disks are correctly less efficient
+with the temperature peak farther out.
+
 Known model limitation (documented in docs/DESIGN.md): the profile is
 truncated at the ISCO; emission from the plunging region is neglected.
 """
@@ -19,6 +26,15 @@ import math
 import numpy
 
 from ..kerr import KerrSpacetime
+
+
+def disk_inner_radius(spacetime: KerrSpacetime) -> float:
+    """ISCO of the +phi circular orbits the disk is built from.
+
+    isco_radius interprets prograde as co-rotating with the hole, so
+    for negative spin the +phi disk orbits take the retrograde branch.
+    """
+    return spacetime.isco_radius(prograde=spacetime.spin >= 0.0)
 
 
 def _radicand_roots(spin: float) -> tuple[float, float, float]:
@@ -44,7 +60,7 @@ def page_thorne_flux(radii, spin: float):
     """
     r = numpy.asarray(radii, dtype=float)
     spacetime = KerrSpacetime(mass=1.0, spin=spin)
-    r_isco = spacetime.isco_radius(prograde=True)
+    r_isco = disk_inner_radius(spacetime)
     x = numpy.sqrt(numpy.maximum(r, 1e-12))
     x0 = math.sqrt(r_isco)
     x1, x2, x3 = _radicand_roots(spin)
@@ -96,7 +112,7 @@ def temperature_lut(
         linearly in radius between r_inner (the ISCO) and r_outer.
     """
     spacetime = KerrSpacetime(mass=1.0, spin=spin)
-    r_inner = spacetime.isco_radius(prograde=True)
+    r_inner = disk_inner_radius(spacetime)
     if outer_radius <= r_inner:
         raise ValueError("outer_radius must exceed the ISCO radius")
     radii = numpy.linspace(r_inner, outer_radius, size)
@@ -112,7 +128,7 @@ def temperature_lut(
 def peak_temperature_radius(spin: float) -> float:
     """Radius (units of M) where the disk temperature peaks."""
     spacetime = KerrSpacetime(mass=1.0, spin=spin)
-    r_inner = spacetime.isco_radius(prograde=True)
+    r_inner = disk_inner_radius(spacetime)
     radii = numpy.linspace(r_inner * 1.0001, r_inner * 20.0, 20000)
     profile = temperature_profile(radii, spin)
     return float(radii[int(numpy.argmax(profile))])
