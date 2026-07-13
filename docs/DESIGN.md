@@ -496,6 +496,9 @@ ordering: retrograde disks truncate and peak farther out (peak radius
   python -m blackhorizon.offline.render no longer trips runpy's
   double-import warning.
 - The TDE demo deposits particle splats into the fading trail buffer
-  several times per output frame (--deposits-per-frame, default 8), so
-  fast-moving debris paints continuous streaks instead of disconnected
-  dots at video frame spacing.
+  many times per output frame (--deposits-per-frame, default 24, sized
+  so the per-deposit displacement stays below the splat width), so
+  fast-moving debris paints a continuous fading ribbon; frames are
+  captured before advancing, so frame zero shows the star at
+  pericenter. Reproduced field numbers on the RTX 3070: hero frame
+  1645 to 1669 s across runs, orbit video 150 to 159 s for 300 frames.

@@ -24,7 +24,7 @@ from ..integrators import rk4_step
 from ..kerr import KerrSpacetime
 
 
-def _splat_kernel(radius: int = 3, sigma: float = 1.3) -> numpy.ndarray:
+def _splat_kernel(radius: int = 4, sigma: float = 1.6) -> numpy.ndarray:
     """Small Gaussian footprint used to draw each particle."""
     x = numpy.arange(-radius, radius + 1)
     xx, yy = numpy.meshgrid(x, x)
@@ -119,7 +119,7 @@ def main() -> None:
     parser.add_argument(
         "--deposits-per-frame",
         type=int,
-        default=8,
+        default=24,
         help="trail deposits per frame; more paints smoother streaks",
     )
     parser.add_argument("--proper-time-step", type=float, default=0.6)
@@ -164,13 +164,10 @@ def main() -> None:
     chunk = max(1, args.steps_per_frame // deposits)
 
     for frame in range(args.frames):
-        for _ in range(deposits):
-            trail *= decay_per_deposit
-            deposit_splats(
-                trail, state[:, 1:4], stream.specific_energies, extent
-            )
-            for _ in range(chunk):
-                state = rk4_step(rhs, state, step)
+        trail *= decay_per_deposit
+        deposit_splats(
+            trail, state[:, 1:4], stream.specific_energies, extent
+        )
         image = compose_frame(trail, spacetime, extent)
         path = output_dir / f"tde_{frame:03d}.png"
         save_png(image, str(path))
@@ -182,6 +179,15 @@ def main() -> None:
             f"{float(numpy.median(radii_now)):.1f} M, "
             f"view half-width {extent:.0f} M -> {path}"
         )
+        # Advance to the next frame, depositing along the way so the
+        # motion paints a continuous fading ribbon.
+        for _ in range(deposits):
+            for _ in range(chunk):
+                state = rk4_step(rhs, state, step)
+            trail *= decay_per_deposit
+            deposit_splats(
+                trail, state[:, 1:4], stream.specific_energies, extent
+            )
 
     # Analytic fallback light curve for the bound debris.
     times = numpy.geomspace(1.0, 300.0, 200)
