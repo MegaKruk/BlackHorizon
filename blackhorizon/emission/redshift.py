@@ -87,11 +87,14 @@ def redshift_factor(
 ) -> Array:
     """Redshift g = nu_obs / nu_em for traced camera rays hitting the disk.
 
-    The tracer follows past-directed rays normalized to p_t = +1; the
-    physical photon momentum is its negative, so with the emitter
-    4-velocity u the emitted frequency is
-    nu_em = -(p_phys . u) = u^t + p_spatial . u_spatial and the observed
-    frequency for a static camera is nu_obs = observer_lapse.
+    The tracer follows past-directed rays; the physical photon
+    momentum is their negative, so with the emitter 4-velocity u the
+    emitted frequency is nu_em = -(p_phys . u) = p_t u^t +
+    p_spatial . u_spatial (traced components). For exterior static
+    cameras rays carry p_t = +1 and nu_obs = observer_lapse; for
+    tetrad-built infalling cameras every ray has unit camera frequency
+    by construction, so observer_lapse is exactly one and p_t varies
+    per ray.
 
     Args:
         spacetime: The Kerr spacetime.
@@ -107,7 +110,7 @@ def redshift_factor(
     """
     xp = xp_of(hit_positions)
     u_t, u_spatial = emitter_four_velocity(spacetime, hit_positions)
-    frequency_emitted = u_t + xp.sum(
+    frequency_emitted = traced_momenta[:, 0] * u_t + xp.sum(
         traced_momenta[:, 1:4] * u_spatial, axis=-1
     )
     return observer_lapse / frequency_emitted

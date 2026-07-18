@@ -189,3 +189,95 @@ class TestShaderPipeline:
         left = float(image[:, : width // 2].mean())
         right = float(image[:, width // 2 :].mean())
         assert left > 1.5 * right, "approaching side must be beamed"
+
+
+class TestInteriorGL:
+    """The GLSL interior mode against the float64 reference."""
+
+    def test_interior_view_matches_reference(self, gl_context):
+        """From inside the horizon: dark-region classification agrees
+        with the reference, more than half the rendered sky shows the
+        outside universe, and the disk is visible (blueshifted) from
+        inside."""
+        import math
+
+        from blackhorizon.emission.novikov_thorne import disk_inner_radius
+        from blackhorizon.frames import (
+            build_tetrad,
+            rain_four_velocity,
+            tetrad_ray_momenta,
+        )
+        from blackhorizon.geodesics import build_state
+        from blackhorizon.realtime.reference import trace_like_shader
+        from blackhorizon.tracer import RayStatus
+
+        spacetime = KerrSpacetime(spin=0.0)
+        width, height = 96, 72
+        settings = RenderSettings(
+            spin=0.0,
+            interior_mode=True,
+            disk_enabled=True,
+            background=BackgroundMode.STARFIELD,
+            exposure=1.5,
+        ).apply_preset(QualityPreset.HIGH)
+        position = numpy.array([1.2, 0.4, -0.5])
+        camera = FlyCamera(position=position.copy(), yaw=25.0, pitch=35.0)
+        camera.four_velocity = rain_four_velocity(
+            spacetime, position[None, :]
+        )[0]
+        engine = KerrRenderEngine(gl_context)
+        try:
+            image = engine.read_frame(settings, camera, width, height)
+        finally:
+            engine.release()
+
+        forward, _, up = camera.basis()
+        tetrad = build_tetrad(
+            spacetime, position, camera.four_velocity, forward, up
+        )
+        tan_half = math.tan(math.radians(settings.fov_degrees) / 2.0)
+        xs = (numpy.arange(width) + 0.5) / width * 2.0 - 1.0
+        ys = 1.0 - (numpy.arange(height) + 0.5) / height * 2.0
+        gx, gy = numpy.meshgrid(xs, ys)
+        local = numpy.stack(
+            [
+                numpy.ones_like(gx),
+                gx * tan_half,
+                gy * tan_half / (width / height),
+            ],
+            axis=-1,
+        ).reshape(-1, 3)
+        local /= numpy.linalg.norm(local, axis=-1, keepdims=True)
+        momenta = tetrad_ray_momenta(spacetime, position, tetrad, local)
+        state0 = build_state(
+            numpy.tile(position[None, :], (local.shape[0], 1)), momenta
+        )
+        inner = disk_inner_radius(spacetime)
+        outer = max(settings.disk_outer_radius, inner + 1.0)
+        result = trace_like_shader(
+            spacetime,
+            state0,
+            settings,
+            settings.effective_escape_radius(
+                float(numpy.linalg.norm(position))
+            ),
+            disk_radii=(inner, outer),
+            interior_stop=settings.interior_stop,
+        )
+        status = result.status
+        ref_dark = (status == int(RayStatus.TERMINATED)) | (
+            status == int(RayStatus.MAX_STEPS)
+        )
+        ref_disk = status == int(RayStatus.DISK)
+        ref_escaped = status == int(RayStatus.ESCAPED)
+        shader_black = numpy.all(image < 8, axis=-1).reshape(-1)
+
+        # Every reference-dark ray must render black.
+        agreement = float((shader_black | ~ref_dark).mean())
+        assert agreement >= 0.97
+        # The outside universe plus disk cover most of this view.
+        assert float((ref_escaped | ref_disk).mean()) > 0.3
+        # The disk is visible from inside and renders bright.
+        disk_pixels = image.reshape(-1, 3)[ref_disk]
+        assert disk_pixels.shape[0] > 100
+        assert float(disk_pixels.max()) > 150

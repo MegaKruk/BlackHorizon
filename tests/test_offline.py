@@ -274,3 +274,73 @@ class TestVideo:
 
         with pytest.raises(FileNotFoundError):
             encode_frames(str(tmp_path), str(tmp_path / "x.mp4"), fps=8)
+
+
+class TestOfflinePlunge:
+    """The programmable doomed-observer plunge (offline/infall.py)."""
+
+    def test_radial_momentum_presets(self):
+        """Rain matches the closed-form Doran state; E = 0 exists only
+        inside; higher energy plunges faster."""
+        import pytest
+
+        from blackhorizon.frames import lower_index, rain_four_velocity
+        from blackhorizon.offline.infall import build_plunge, radial_momentum
+
+        spacetime = KerrSpacetime(spin=0.0)
+        position = numpy.array([5.0, 0.0, 0.0])
+        rain = radial_momentum(spacetime, position, 1.0)
+        expected = lower_index(
+            spacetime,
+            position[None, :],
+            rain_four_velocity(spacetime, position[None, :]),
+        )
+        assert numpy.allclose(rain, expected, atol=1e-12)
+
+        with pytest.raises(ValueError):
+            radial_momentum(spacetime, numpy.array([3.0, 0.0, 0.0]), 0.0)
+        inside = radial_momentum(
+            spacetime, numpy.array([1.9, 0.0, 0.0]), 0.0
+        )
+        assert abs(float(inside[0, 0])) < 1e-12
+
+        tau_rain = build_plunge(spacetime, 5.0, 1.0, 0.05)[0][-1]
+        tau_fast = build_plunge(spacetime, 5.0, 1.6, 0.05)[0][-1]
+        assert tau_fast < tau_rain
+
+    def test_interior_frame_renders_sky(self):
+        """A small interior frame looking outward shows the outside
+        universe and is deterministic."""
+        from blackhorizon.offline.infall import build_plunge, plunge_tetrad
+        from blackhorizon.realtime.fly_camera import FlyCamera
+
+        spacetime = KerrSpacetime(spin=0.0)
+        taus, states = build_plunge(spacetime, 3.0, 1.0, 0.05)
+        index = int(numpy.searchsorted(taus, taus[-1] * 0.8))
+        position, tetrad = plunge_tetrad(
+            spacetime, states[index], "outward"
+        )
+        radius = float(
+            spacetime.kerr_schild_radius(
+                position[None, 0], position[None, 1], position[None, 2]
+            )[0]
+        )
+        assert radius < spacetime.outer_horizon_radius
+        camera = FlyCamera(position=position.copy(), yaw=0.0, pitch=0.0)
+        settings = OfflineSettings(
+            spin=0.0, supersample=1, fov_degrees=80.0, disk_enabled=False
+        )
+        first = render_hdr(
+            camera, 64, 40, settings, progress=False,
+            camera_tetrad=tetrad, interior_stop=0.05,
+        )
+        second = render_hdr(
+            camera, 64, 40, settings, progress=False,
+            camera_tetrad=tetrad, interior_stop=0.05,
+        )
+        assert numpy.array_equal(first, second)
+        # The outside universe is visible looking outward from inside;
+        # deep-interior sky light is redshift-dimmed (intensity scales
+        # as g^4), so assert on presence, not absolute brightness.
+        assert float((first.max(axis=-1) > 1e-4).mean()) > 0.05
+        assert bool(numpy.isfinite(first).all())

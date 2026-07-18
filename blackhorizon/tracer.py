@@ -27,6 +27,7 @@ class RayStatus(IntEnum):
     MAX_STEPS = 3
     FAILED = 4
     DISK = 5
+    TERMINATED = 6
 
 
 @dataclass(frozen=True)

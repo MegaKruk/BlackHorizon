@@ -38,7 +38,10 @@ import numpy
 from ..imaging import save_png
 from .engine import KerrRenderEngine
 from .fly_camera import FlyCamera
+from .infall import InfallState
 from .settings import BackgroundMode, QualityPreset, RenderSettings
+
+from ..kerr import KerrSpacetime
 
 
 _BLIT_VERTEX = """
@@ -115,6 +118,14 @@ class InteractiveApp:
         self._pressed_once: set[int] = set()
         self._fps = 0.0
 
+        # Doomed-observer state: created when the camera crosses the
+        # horizon; the reset button is the only way back out.
+        self.infall: InfallState | None = None
+        self.time_scale = 0.2
+        self.overlay_enabled = True
+        self._lookahead_cooldown = 0.0
+        self._thrusting = False
+
     # Input handling
 
     def _key_pressed_once(self, key: int) -> bool:
@@ -132,6 +143,14 @@ class InteractiveApp:
         if self.panel is None:
             return False, False
         return self.panel.want_capture()
+
+    def _reset_camera(self) -> None:
+        """The only exit from inside the horizon: a fresh start."""
+        self.camera = FlyCamera.from_orbit(
+            self.start_distance, self.start_inclination
+        )
+        self.infall = None
+        self.settings.interior_mode = False
 
     def _handle_input(self, dt: float) -> None:
         ui_keyboard, ui_mouse = self._ui_wants_input()
@@ -152,12 +171,25 @@ class InteractiveApp:
             if key(glfw.KEY_Q):
                 direction[2] -= 1.0
             boost = 4.0 if key(glfw.KEY_LEFT_SHIFT) else 1.0
-            self.camera.move(direction, dt, boost)
+            if self.infall is None:
+                self.camera.move(direction, dt, boost)
+            else:
+                # Thrust: an exact boost in the local frame. Physics
+                # forbids increasing r inside; burns only reshape the
+                # plunge and generally shorten it.
+                self._thrusting = bool(numpy.any(direction != 0.0))
+                if self._thrusting and not self.infall.terminated():
+                    forward, _, up = self.camera.basis()
+                    self.infall.thrust(
+                        direction,
+                        0.8 * boost * dt,
+                        forward,
+                        up,
+                        recompute_lookahead=False,
+                    )
 
             if self._key_pressed_once(glfw.KEY_R):
-                self.camera = FlyCamera.from_orbit(
-                    self.start_distance, self.start_inclination
-                )
+                self._reset_camera()
             if self._key_pressed_once(glfw.KEY_B):
                 self.settings.background = (
                     BackgroundMode.STARFIELD
@@ -173,10 +205,15 @@ class InteractiveApp:
             for key_code, preset in presets.items():
                 if self._key_pressed_once(key_code):
                     self.settings = self.settings.apply_preset(preset)
-            if self._key_pressed_once(glfw.KEY_LEFT_BRACKET):
-                self.settings.spin = max(-1.0, self.settings.spin - 0.05)
-            if self._key_pressed_once(glfw.KEY_RIGHT_BRACKET):
-                self.settings.spin = min(1.0, self.settings.spin + 0.05)
+            if self.infall is None:
+                if self._key_pressed_once(glfw.KEY_LEFT_BRACKET):
+                    self.settings.spin = max(
+                        -1.0, self.settings.spin - 0.05
+                    )
+                if self._key_pressed_once(glfw.KEY_RIGHT_BRACKET):
+                    self.settings.spin = min(
+                        1.0, self.settings.spin + 0.05
+                    )
             if self._key_pressed_once(glfw.KEY_F12):
                 self._save_screenshot()
 
@@ -207,12 +244,52 @@ class InteractiveApp:
 
     # UI panel
 
+    def _update_worldline(self, dt: float) -> None:
+        """Advance the doomed observer and detect horizon crossings."""
+        spacetime = KerrSpacetime(spin=self.settings.spin)
+        if self.infall is None:
+            if (
+                self.camera.distance_from_origin
+                <= spacetime.outer_horizon_radius
+            ):
+                self.infall = InfallState.from_crossing(
+                    spacetime,
+                    self.camera.position,
+                    self.settings.interior_stop,
+                )
+                self.settings.interior_mode = True
+                self._lookahead_cooldown = 0.0
+            return
+
+        self.infall.advance(dt * self.time_scale)
+        self.camera.position = self.infall.position
+        self.camera.four_velocity = self.infall.four_velocity
+
+        # Burns invalidate the countdown; recompute it at most a few
+        # times per second so held thrust keys stay smooth.
+        self._lookahead_cooldown -= dt
+        if self._thrusting and self._lookahead_cooldown <= 0.0:
+            self.infall.remaining_tau = (
+                self.infall.lookahead_remaining_tau()
+            )
+            self._lookahead_cooldown = 0.25
+        self._thrusting = False
+
     def _draw_ui(self) -> None:
         if self.panel is None:
             return
-        self.settings = self.panel.draw(
-            self.settings, self.camera, self._fps
+        self.settings, actions = self.panel.draw(
+            self.settings,
+            self.camera,
+            self._fps,
+            infall=self.infall,
+            overlay_enabled=self.overlay_enabled,
+            time_scale=self.time_scale,
         )
+        self.overlay_enabled = actions["overlay_enabled"]
+        self.time_scale = actions["time_scale"]
+        if actions["reset"]:
+            self._reset_camera()
 
     # Main loop
 
@@ -231,6 +308,7 @@ class InteractiveApp:
             if glfw.get_key(self.window, glfw.KEY_ESCAPE) == glfw.PRESS:
                 glfw.set_window_should_close(self.window, True)
             self._handle_input(dt)
+            self._update_worldline(dt)
 
             width, height = glfw.get_framebuffer_size(self.window)
             if width == 0 or height == 0:

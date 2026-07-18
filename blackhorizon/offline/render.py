@@ -28,6 +28,7 @@ from ..backend import get_xp, to_numpy, xp_of
 from ..emission.blackbody import blackbody_lut
 from ..emission.novikov_thorne import disk_inner_radius, temperature_lut
 from ..emission.redshift import redshift_factor, static_observer_lapse
+from ..frames import tetrad_ray_momenta
 from ..geodesics import build_state, geodesic_rhs, null_momentum_from_velocity
 from ..imaging import save_png
 from ..integrators import (
@@ -93,20 +94,21 @@ class _TraceOutput:
     saturated: numpy.ndarray = field(default=None)
 
 
-def subpixel_directions(
-    camera: FlyCamera,
+def pinhole_grid(
     width: int,
     height: int,
     fov_degrees: float,
     supersample: int,
 ) -> numpy.ndarray:
-    """View directions for every subpixel sample, shape (n, 3).
+    """Local-frame pinhole sample directions, shape (n, 3).
 
-    Samples sit on a regular supersample x supersample grid inside each
-    pixel, ordered row-major by pixel then by subpixel, so averaging
-    groups of supersample^2 consecutive rays downsamples the image.
+    Components are (forward, right, up) coefficients on a regular
+    supersample x supersample grid inside each pixel, ordered row-major
+    by pixel then by subpixel, so averaging groups of supersample^2
+    consecutive rays downsamples the image. World cameras rotate these
+    by their basis; tetrad cameras use them directly as local
+    aberration directions.
     """
-    forward, right, up = camera.basis()
     tan_half = math.tan(math.radians(fov_degrees) / 2.0)
     aspect = width / height
     ss = supersample
@@ -126,29 +128,49 @@ def subpixel_directions(
     v_grid = numpy.tile(
         v.reshape(height, ss)[:, None, :, None], (1, width, 1, ss)
     )
-    directions = (
-        forward[None, :]
-        + u_grid.reshape(-1)[:, None] * tan_half * right[None, :]
-        + v_grid.reshape(-1)[:, None] * (tan_half / aspect) * up[None, :]
+    local = numpy.stack(
+        [
+            numpy.ones(u_grid.size),
+            u_grid.reshape(-1) * tan_half,
+            v_grid.reshape(-1) * (tan_half / aspect),
+        ],
+        axis=-1,
     )
-    return directions / numpy.linalg.norm(
-        directions, axis=-1, keepdims=True
+    return local / numpy.linalg.norm(local, axis=-1, keepdims=True)
+
+
+def subpixel_directions(
+    camera: FlyCamera,
+    width: int,
+    height: int,
+    fov_degrees: float,
+    supersample: int,
+) -> numpy.ndarray:
+    """World-frame view directions for every subpixel, shape (n, 3)."""
+    forward, right, up = camera.basis()
+    local = pinhole_grid(width, height, fov_degrees, supersample)
+    return (
+        local[:, 0:1] * forward[None, :]
+        + local[:, 1:2] * right[None, :]
+        + local[:, 2:3] * up[None, :]
     )
 
 
 def _flat_directions(
-    spacetime: KerrSpacetime, positions, momenta
+    spacetime: KerrSpacetime, positions, momenta, p_t=None
 ):
     """Asymptotic flat-space direction of escaped rays.
 
-    Mirrors the shader: dx = p - 2 H lp l with lp = -p_t + l . p and
-    the traced p_t = +1.
+    Mirrors the shader: dx = p - 2 H lp l with lp = -p_t + l . p.
+    Exterior rays carry the traced normalization p_t = +1; interior
+    tetrad rays pass their per-ray conserved energies.
     """
     xp = xp_of(positions)
     geo = spacetime.geometry(
         positions[:, 0], positions[:, 1], positions[:, 2]
     )
-    lp = -1.0 + xp.sum(geo.l * momenta, axis=-1)
+    energies = 1.0 if p_t is None else p_t
+    lp = -energies + xp.sum(geo.l * momenta, axis=-1)
     directions = momenta - 2.0 * (geo.h * lp)[:, None] * geo.l
     norm = xp.sqrt(xp.sum(directions * directions, axis=-1))
     return directions / norm[:, None]
@@ -162,6 +184,7 @@ def _trace_tile(
     disk_radii: tuple[float, float] | None,
     rtol: float,
     max_steps: int,
+    interior_stop: float | None = None,
 ) -> _TraceOutput:
     """Adaptively trace one tile of rays with disk crossings refined.
 
@@ -172,9 +195,16 @@ def _trace_tile(
     """
     xp = xp_of(state0)
     n = state0.shape[0]
-    capture_radius = spacetime.outer_horizon_radius * (
-        1.0 + settings.capture_margin
-    )
+    if interior_stop is None:
+        capture_radius = spacetime.outer_horizon_radius * (
+            1.0 + settings.capture_margin
+        )
+        capture_status = int(RayStatus.CAPTURED)
+    else:
+        # Interior camera: rays cross the horizon freely (backward in
+        # time) and terminate only near the singularity.
+        capture_radius = interior_stop
+        capture_status = int(RayStatus.TERMINATED)
 
     def rhs(batch):
         return geodesic_rhs(spacetime, batch)
@@ -196,9 +226,18 @@ def _trace_tile(
         y = states[idx]
         radius = spacetime.kerr_schild_radius(y[:, 1], y[:, 2], y[:, 3])
         captured = radius <= capture_radius
+        if interior_stop is not None:
+            # A diverging momentum marks a ray ending on the
+            # singularity; classify early instead of resolving the
+            # crawl toward it at full tolerance (the pixel is black
+            # either way).
+            momentum_norm = xp.sqrt(
+                xp.sum(y[:, 5:8] * y[:, 5:8], axis=-1)
+            )
+            captured = captured | (momentum_norm > 3.0e3)
         escaped = ~captured & (radius >= escape_radius)
         exhausted = steps[idx] >= max_steps
-        status[idx[captured]] = int(RayStatus.CAPTURED)
+        status[idx[captured]] = capture_status
         status[idx[escaped]] = int(RayStatus.ESCAPED)
         status[idx[exhausted & ~captured & ~escaped]] = int(
             RayStatus.MAX_STEPS
@@ -246,6 +285,7 @@ def _trace_tile(
             spacetime,
             states[escape_mask][:, 1:4],
             states[escape_mask][:, 5:8],
+            p_t=states[escape_mask][:, 4],
         )
 
     return _TraceOutput(
@@ -297,13 +337,21 @@ def _refine_crossings(
     return hits, y_cross[hits][:, 1:4], y_cross[hits][:, 5:8]
 
 
-def _starfield_hdr(directions: numpy.ndarray) -> numpy.ndarray:
+def _starfield_hdr(
+    directions: numpy.ndarray, shift: numpy.ndarray | None = None
+) -> numpy.ndarray:
     """Deterministic HDR starfield sampled by view direction.
 
     Two hash-based layers of point stars with blackbody-like tints on a
     latitude-longitude cell grid, plus a faint warm band around the
     equatorial plane of the sky. Values can exceed one so bright stars
     bloom in post.
+
+    When per-ray shift factors g = nu_obs / nu_em are given (infalling
+    tetrad cameras), specific intensity scales as g^4 (Liouville
+    invariance of I_nu / nu^3 integrated over frequency) and each
+    star's pseudo-blackbody tint slides toward blue for g > 1 and red
+    for g < 1, a first-order chromatic shift of the hashed palette.
     """
     phi = numpy.arctan2(directions[:, 1], directions[:, 0])
     theta = numpy.arccos(numpy.clip(directions[:, 2], -1.0, 1.0))
@@ -325,6 +373,13 @@ def _starfield_hdr(directions: numpy.ndarray) -> numpy.ndarray:
         amplitude = brightness * (0.15 + magnitude**4)
         point = numpy.exp(-dist2 / 0.006)
         warmth = hash01(iu, iv, 5.0)
+        if shift is not None:
+            amplitude = amplitude * shift**4
+            warmth = numpy.clip(
+                warmth - 0.6 * numpy.log(numpy.maximum(shift, 1e-6)),
+                0.0,
+                1.0,
+            )
         tint = numpy.stack(
             [
                 0.75 + 0.35 * warmth,
@@ -336,7 +391,10 @@ def _starfield_hdr(directions: numpy.ndarray) -> numpy.ndarray:
         color += (present * amplitude * point)[:, None] * tint
 
     band = 0.035 * numpy.exp(-((directions[:, 2] / 0.30) ** 2))
-    color += band[:, None] * numpy.array([1.0, 0.92, 0.80])
+    band_color = band[:, None] * numpy.array([1.0, 0.92, 0.80])
+    if shift is not None:
+        band_color = band_color * (shift**4)[:, None]
+    color += band_color
     return color
 
 
@@ -411,6 +469,8 @@ def render_hdr(
     height: int,
     settings: OfflineSettings,
     progress: bool = True,
+    camera_tetrad: numpy.ndarray | None = None,
+    interior_stop: float | None = None,
 ) -> numpy.ndarray:
     """Render a linear HDR frame at maximum fidelity.
 
@@ -425,6 +485,13 @@ def render_hdr(
         height: Image height in pixels.
         settings: Physics and quality parameters.
         progress: Print per-tile progress.
+        camera_tetrad: Orthonormal tetrad (4, 4) of an infalling
+            observer (frames.build_tetrad). When given, rays are
+            generated by local aberration with unit camera frequency,
+            the observer lapse is one, and the starfield and disk are
+            shifted by each ray's conserved energy.
+        interior_stop: Interior camera mode: rays cross the horizon
+            freely and terminate at this radius near the singularity.
 
     Returns:
         Linear HDR image, shape (height, width, 3), float32.
@@ -440,15 +507,30 @@ def render_hdr(
         settings.spin, disk_outer, size=2048
     )
     bb_table, bb_log_min, bb_log_max = blackbody_lut(size=1024)
-    try:
-        observer_lapse = static_observer_lapse(spacetime, camera.position)
-    except ValueError:
+    if camera_tetrad is not None:
+        # Tetrad rays carry unit camera frequency by construction.
         observer_lapse = 1.0
-    escape_radius = 1.3 * max(camera.distance_from_origin, disk_outer)
-
-    directions = subpixel_directions(
-        camera, width, height, settings.fov_degrees, settings.supersample
-    )
+        escape_radius = max(100.0, 1.3 * disk_outer)
+        directions = pinhole_grid(
+            width, height, settings.fov_degrees, settings.supersample
+        )
+    else:
+        try:
+            observer_lapse = static_observer_lapse(
+                spacetime, camera.position
+            )
+        except ValueError:
+            observer_lapse = 1.0
+        escape_radius = 1.3 * max(
+            camera.distance_from_origin, disk_outer
+        )
+        directions = subpixel_directions(
+            camera,
+            width,
+            height,
+            settings.fov_degrees,
+            settings.supersample,
+        )
     n = directions.shape[0]
     radiance = numpy.zeros((n, 3), dtype=numpy.float64)
     start = time.perf_counter()
@@ -459,9 +541,17 @@ def render_hdr(
         positions = numpy.tile(
             camera.position[None, :], (tile_directions.shape[0], 1)
         )
-        momenta = null_momentum_from_velocity(
-            spacetime, positions, tile_directions, time_orientation="past"
-        )
+        if camera_tetrad is not None:
+            momenta = tetrad_ray_momenta(
+                spacetime, camera.position, camera_tetrad, tile_directions
+            )
+        else:
+            momenta = null_momentum_from_velocity(
+                spacetime,
+                positions,
+                tile_directions,
+                time_orientation="past",
+            )
         state0 = xp.asarray(build_state(positions, momenta))
 
         result = _trace_tile(
@@ -472,12 +562,13 @@ def render_hdr(
             disk_radii,
             settings.rtol,
             settings.max_steps,
+            interior_stop=interior_stop,
         )
 
         # Photon-shell refinement pass with tighter tolerance.
         retrace = result.saturated & (
             result.status != int(RayStatus.DISK)
-        )
+        ) & (result.status != int(RayStatus.TERMINATED))
         if bool(retrace.any()):
             refined = _trace_tile(
                 spacetime,
@@ -487,6 +578,7 @@ def render_hdr(
                 disk_radii,
                 settings.refine_rtol,
                 settings.max_steps * 4,
+                interior_stop=interior_stop,
             )
             for name in ("status", "escape_directions"):
                 getattr(result, name)[retrace] = getattr(refined, name)
@@ -498,8 +590,13 @@ def render_hdr(
         )
         escaped = result.status == int(RayStatus.ESCAPED)
         if escaped.any():
+            shift = None
+            if camera_tetrad is not None:
+                # g = nu_cam / nu_sky = 1 / E with unit camera
+                # frequency and the ray's conserved energy E.
+                shift = 1.0 / momenta[escaped, 0]
             tile_radiance[escaped] = _starfield_hdr(
-                result.escape_directions[escaped]
+                result.escape_directions[escaped], shift=shift
             )
         disk_hits = result.status == int(RayStatus.DISK)
         if disk_hits.any():

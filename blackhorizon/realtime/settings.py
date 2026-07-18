@@ -75,6 +75,12 @@ class RenderSettings:
             blueshift; see momentum_bailout.
         escape_radius: Radius at which rays sample the background. If not
             positive, the engine derives it from the camera distance.
+        interior_mode: Doomed-observer camera inside the horizon; rays
+            come from the infalling tetrad, are never captured at the
+            horizon, and terminate near the singularity.
+        interior_stop: Radius (units of M) where interior rays and the
+            camera worldline terminate; the classical stand-in for the
+            singularity.
         disk_enabled: Whether the Novikov-Thorne disk is rendered.
         disk_outer_radius: Outer disk edge in units of M. The engine
             clamps the effective value above the spin-dependent ISCO.
@@ -102,6 +108,8 @@ class RenderSettings:
     escape_radius: float = 0.0
     momentum_bailout: float = 1e3
     background: BackgroundMode = BackgroundMode.CHECKERBOARD
+    interior_mode: bool = False
+    interior_stop: float = 0.02
     disk_enabled: bool = True
     disk_outer_radius: float = 18.0
     disk_temperature: float = 6500.0
@@ -128,6 +136,8 @@ class RenderSettings:
             raise ValueError("capture_margin must be non-negative")
         if self.momentum_bailout <= 1.0:
             raise ValueError("momentum_bailout must exceed 1")
+        if not 1e-4 <= self.interior_stop <= 1.0:
+            raise ValueError("interior_stop must be in [1e-4, 1] M")
         if self.disk_outer_radius <= 1.0:
             raise ValueError("disk_outer_radius must exceed 1 M")
         if not 500.0 <= self.disk_temperature <= 40000.0:

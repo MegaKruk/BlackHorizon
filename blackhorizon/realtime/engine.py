@@ -17,6 +17,7 @@ import numpy
 
 from ..emission.blackbody import blackbody_lut
 from ..emission.novikov_thorne import disk_inner_radius, temperature_lut
+from ..frames import build_tetrad, rain_four_velocity
 from ..kerr import KerrSpacetime
 from .fly_camera import FlyCamera
 from .settings import MAX_STEPS_HARD_LIMIT, RenderSettings
@@ -113,6 +114,41 @@ class KerrRenderEngine:
         self._temperature_key = key
         self._disk_inner = r_inner
 
+    def _interior_uniforms(
+        self, spacetime: KerrSpacetime, camera: FlyCamera, settings
+    ) -> dict:
+        """Tetrad and mode uniforms for the doomed-observer camera.
+
+        The tetrad rides the camera's infalling 4-velocity (supplied by
+        the app's interior state machine via camera.four_velocity, or
+        the rain default) with spatial legs aimed along the current
+        view basis; every generated ray then has unit camera frequency,
+        so the observer lapse is exactly one.
+        """
+        interior = bool(getattr(settings, "interior_mode", False))
+        if not interior:
+            return {"u_interior_mode": 0, "u_interior_stop": 0.0}
+        position = camera.position
+        four_velocity = getattr(camera, "four_velocity", None)
+        if four_velocity is None:
+            four_velocity = rain_four_velocity(
+                spacetime, position[None, :]
+            )[0]
+        forward, right, up = camera.basis()
+        tetrad = build_tetrad(
+            spacetime, position, four_velocity, forward, up
+        )
+        return {
+            "u_interior_mode": 1,
+            "u_interior_stop": float(
+                getattr(settings, "interior_stop", 0.02)
+            ),
+            "u_tetrad_time": tuple(tetrad[0]),
+            "u_tetrad_forward": tuple(tetrad[1]),
+            "u_tetrad_right": tuple(tetrad[2]),
+            "u_tetrad_up": tuple(tetrad[3]),
+        }
+
     def _observer_lapse(
         self, spacetime: KerrSpacetime, camera: FlyCamera
     ) -> float:
@@ -171,6 +207,12 @@ class KerrRenderEngine:
             "u_temperature_lut": 0,
             "u_blackbody_lut": 1,
         }
+        interior_uniforms = self._interior_uniforms(
+            spacetime, camera, settings
+        )
+        if interior_uniforms["u_interior_mode"] == 1:
+            uniforms["u_observer_lapse"] = 1.0
+        uniforms.update(interior_uniforms)
         for name, value in uniforms.items():
             self.program[name].value = value
 

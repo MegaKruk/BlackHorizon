@@ -44,11 +44,17 @@ def trace_like_shader(
     settings: RenderSettings,
     escape_radius: float,
     disk_radii: tuple[float, float] | None = None,
+    interior_stop: float | None = None,
 ) -> ReferenceResult:
     """Trace rays exactly as the fragment shader does.
 
-    Fixed RK4 steps with h = clip(step_scale * (r - r_plus), min_step,
-    max_step), terminating on capture, escape, or the step budget. Rays
+    Fixed RK4 steps with a piecewise heuristic: outside the horizon
+    h = clip(step_scale * (r - r_plus), min_step, max_step), preserving
+    the fine resolution that winding near-horizon rays need; inside,
+    h = clip(step_scale * r / 2, ...), since no photon orbits exist
+    there, Kerr-Schild is regular at the crossing, and steps must
+    shrink toward the singularity. Terminates on capture, escape, or
+    the step budget. Rays
     that exhaust the budget are reported as MAX_STEPS; the shader colors
     them black, which the tests account for.
 
@@ -60,12 +66,23 @@ def trace_like_shader(
         disk_radii: Optional (inner, outer) disk radii; when given, an
             opaque equatorial disk terminates crossing rays exactly as
             the shader does.
+        interior_stop: When set (interior camera mode), rays are not
+            captured at the horizon; instead they terminate with
+            RayStatus.TERMINATED at this small radius near the
+            singularity. Rays crossing the horizon outward, backward in
+            time, propagate normally, which is how an infalling camera
+            still sees the outside universe.
 
     Returns:
         A ReferenceResult with final status, positions, and momenta.
     """
     r_plus = spacetime.outer_horizon_radius
-    capture_radius = r_plus * (1.0 + settings.capture_margin)
+    if interior_stop is None:
+        capture_radius = r_plus * (1.0 + settings.capture_margin)
+        capture_status = int(RayStatus.CAPTURED)
+    else:
+        capture_radius = interior_stop
+        capture_status = int(RayStatus.TERMINATED)
     n = state0.shape[0]
     state = state0.copy()
     status = numpy.full((n,), int(RayStatus.MAX_STEPS), dtype=numpy.int32)
@@ -89,7 +106,7 @@ def trace_like_shader(
             momentum2 >= settings.momentum_bailout**2
         )
         escaped = ~captured & (radius >= escape_radius)
-        status[idx[captured]] = int(RayStatus.CAPTURED)
+        status[idx[captured]] = capture_status
         status[idx[escaped]] = int(RayStatus.ESCAPED)
         active[idx] = ~(captured | escaped)
         keep = ~(captured | escaped)
@@ -99,8 +116,11 @@ def trace_like_shader(
         y = y[keep]
         radius = radius[keep]
 
+        scale_length = numpy.where(
+            radius > r_plus, radius - r_plus, 0.5 * radius
+        )
         h = numpy.clip(
-            settings.step_scale * (radius - r_plus),
+            settings.step_scale * scale_length,
             settings.min_step,
             settings.max_step,
         )

@@ -16,8 +16,10 @@ import ctypes
 
 from imgui_bundle import imgui
 
+import math
+
 from .fly_camera import FlyCamera
-from .settings import QualityPreset, RenderSettings
+from .settings import BackgroundMode, QualityPreset, RenderSettings
 
 
 class SettingsPanel:
@@ -47,21 +49,78 @@ class SettingsPanel:
         return io.want_capture_keyboard, io.want_capture_mouse
 
     def draw(
-        self, settings: RenderSettings, camera: FlyCamera, fps: float
-    ) -> RenderSettings:
-        """Draw the panel and return the (possibly preset-replaced) settings.
+        self,
+        settings: RenderSettings,
+        camera: FlyCamera,
+        fps: float,
+        infall=None,
+        overlay_enabled: bool = True,
+        time_scale: float = 0.2,
+    ) -> tuple[RenderSettings, dict]:
+        """Draw the panel; return settings and requested actions.
 
         Scalar fields are mutated in place; applying a quality preset
         returns a new RenderSettings instance, which the caller must
-        adopt.
+        adopt. The actions dict carries the reset request and the
+        overlay and time-scale values.
         """
         imgui.backends.opengl3_new_frame()
         imgui.backends.glfw_new_frame()
         imgui.new_frame()
 
+        actions = {
+            "reset": False,
+            "overlay_enabled": overlay_enabled,
+            "time_scale": time_scale,
+        }
+
         imgui.begin("Black Horizon")
         imgui.text(f"{fps:.0f} fps")
-        imgui.text(f"camera r = {camera.distance_from_origin:.1f} M")
+        if infall is None:
+            imgui.text(
+                f"camera r = {camera.distance_from_origin:.1f} M"
+            )
+        else:
+            imgui.text_colored(
+                imgui.ImVec4(1.0, 0.35, 0.25, 1.0),
+                f"INSIDE THE HORIZON  r = {infall.radius:.3f} M",
+            )
+            if infall.terminated():
+                imgui.text_colored(
+                    imgui.ImVec4(1.0, 0.2, 0.2, 1.0),
+                    "worldline ended at the central singularity",
+                )
+            else:
+                imgui.text_colored(
+                    imgui.ImVec4(1.0, 0.55, 0.2, 1.0),
+                    "proper time to singularity: "
+                    f"{infall.remaining_tau:6.3f} M",
+                )
+                imgui.text(
+                    f"proper time inside: {infall.elapsed_tau:6.3f} M"
+                )
+            changed, value = imgui.slider_float(
+                "time scale M/s", time_scale, 0.02, 1.0
+            )
+            if changed:
+                actions["time_scale"] = value
+        if imgui.button("reset camera"):
+            actions["reset"] = True
+        imgui.same_line()
+        starfield = settings.background == BackgroundMode.STARFIELD
+        changed, value = imgui.checkbox("starfield", starfield)
+        if changed:
+            settings.background = (
+                BackgroundMode.STARFIELD
+                if value
+                else BackgroundMode.CHECKERBOARD
+            )
+        imgui.same_line()
+        changed, value = imgui.checkbox("overlays", overlay_enabled)
+        if changed:
+            actions["overlay_enabled"] = value
+        if overlay_enabled:
+            self._draw_light_cone_glyph(settings, camera, infall)
 
         changed, value = imgui.slider_float(
             "spin a/M", settings.spin, -0.999, 0.999
@@ -119,12 +178,68 @@ class SettingsPanel:
                 settings = settings.apply_preset(preset)
             imgui.same_line()
         imgui.new_line()
-        imgui.text("right-drag: look, WASDQE: move, shift: boost")
+        if infall is None:
+            imgui.text("right-drag: look, WASDQE: move, shift: boost")
+        else:
+            imgui.text(
+                "right-drag: look, WASDQE: thrust (burns shorten "
+                "life), R: reset"
+            )
         imgui.end()
 
         imgui.render()
         imgui.backends.opengl3_render_draw_data(imgui.get_draw_data())
-        return settings
+        return settings, actions
+
+    def _draw_light_cone_glyph(
+        self, settings: RenderSettings, camera: FlyCamera, infall
+    ) -> None:
+        """Pedagogical light-cone widget in the panel.
+
+        Draws the future light cone tilted by the river-model inflow
+        speed v = sqrt(2H) (Hamilton and Lisle 2008): v < 1 outside,
+        v = 1 at the horizon, v > 1 inside, where the whole cone points
+        inward and no escape direction exists.
+        """
+        radius = (
+            infall.radius if infall is not None
+            else camera.distance_from_origin
+        )
+        spin = settings.spin
+        r_plus = 1.0 + math.sqrt(max(0.0, 1.0 - spin * spin))
+        # Equatorial Kerr-Schild H = M r / (r^2 + small): use the
+        # Schwarzschild-form magnitude as the glyph's inflow speed.
+        v_river = math.sqrt(2.0 / max(radius, 1e-3))
+        imgui.text(
+            f"river inflow v = {v_river:.2f} c "
+            + ("(inside: no way out)" if radius <= r_plus else "")
+        )
+        draw_list = imgui.get_window_draw_list()
+        origin = imgui.get_cursor_screen_pos()
+        size = 84.0
+        apex = imgui.ImVec2(origin.x + size, origin.y + 8.0)
+        length = size * 0.75
+        # The cone axis tilts inward (screen left) by the inflow speed;
+        # edges sit 45 degrees either side of the axis.
+        tilt = math.atan(v_river)
+        for sign in (-1.0, 1.0):
+            angle = tilt + sign * (math.pi / 4.0)
+            tip = imgui.ImVec2(
+                apex.x - length * math.sin(angle),
+                apex.y + length * math.cos(angle),
+            )
+            draw_list.add_line(
+                apex, tip, imgui.color_convert_float4_to_u32(
+                    imgui.ImVec4(1.0, 0.8, 0.3, 1.0)
+                ), 2.0,
+            )
+        label = (
+            "both cone edges point inward"
+            if v_river > 1.0
+            else "outward edge still escapes"
+        )
+        imgui.dummy(imgui.ImVec2(size * 2.2, length + 14.0))
+        imgui.text(label)
 
     def shutdown(self) -> None:
         """Release the imgui backends and context."""

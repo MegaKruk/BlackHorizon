@@ -166,3 +166,35 @@ Encode existing PNG frames (for example the TDE demo output):
 
 For long orbital evolutions, integrators.implicit_midpoint_step is a
 symplectic alternative to RK4 with bounded long-term energy error.
+
+## Stage 5: flying into the black hole
+
+In the realtime app, fly across the event horizon (WASDQE toward the
+hole; the panel shows your r in units of M). At the crossing the
+camera becomes a doomed observer: a timelike worldline integrated in
+proper time on the rain (free-fall) trajectory. Inside:
+
+- The panel turns red: INSIDE THE HORIZON, with your current r, a
+  proper-time countdown to the singularity, and a time-scale slider.
+- WASDQE fire thrusters (exact local-frame boosts). No burn can
+  increase r inside; burns generally shorten your remaining proper
+  time, and braking toward the E = 0 trajectory lengthens it, up to
+  the absolute maximum of pi M from the horizon.
+- Right-drag still looks around: more than half the sky shows the
+  outside universe just after crossing, and the accretion disk seen
+  transversely turns blue-white from blueshift.
+- The light-cone overlay draws the river-model inflow: inside, both
+  cone edges point inward.
+- The reset camera button (or R) is the only way out.
+
+Offline, render a maximum-fidelity plunge:
+
+    python -m blackhorizon.offline.infall --frames 10 --width 960 \
+        --height 600 --look side --start-radius 8 \
+        --output-dir plunge_frames
+    python -m blackhorizon.offline.video --encode-frames plunge_frames \
+        --fps 8 --output plunge.mp4
+
+Presets: --preset rain (E = 1, default), maximal (E = 0, the longest
+possible interior life), fast --energy 1.5. Views: --look outward
+(the shrinking sky), inward (the darkness ahead), side (disk and sky).
