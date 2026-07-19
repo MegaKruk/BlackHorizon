@@ -256,11 +256,14 @@ class InteractiveApp:
                     spacetime,
                     self.camera.position,
                     self.settings.interior_stop,
+                    journey=self.settings.interior_journey,
                 )
                 self.settings.interior_mode = True
                 self._lookahead_cooldown = 0.0
             return
 
+        # The journey mode can be toggled mid-flight from the panel.
+        self.infall.set_journey(self.settings.interior_journey)
         self.infall.advance(dt * self.time_scale)
         self.camera.position = self.infall.position
         self.camera.four_velocity = self.infall.four_velocity

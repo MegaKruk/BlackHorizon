@@ -78,9 +78,19 @@ class RenderSettings:
         interior_mode: Doomed-observer camera inside the horizon; rays
             come from the infalling tetrad, are never captured at the
             horizon, and terminate near the singularity.
+        interior_journey: What happens at the inner (Cauchy) horizon
+            of a spinning hole. "realistic": the journey terminates
+            there, where the infinitely blueshifted blue sheet ends
+            any physical infall (mass inflation; Dafermos-Luk
+            arXiv:1710.01722). "idealized": continue into the inner
+            region of exact eternal vacuum Kerr, a region current
+            astrophysics holds does not survive in real black holes,
+            offered for the indestructible-observer thought
+            experiment. Ignored for spin zero, where the plunge always
+            runs to the central singularity.
         interior_stop: Radius (units of M) where interior rays and the
             camera worldline terminate; the classical stand-in for the
-            singularity.
+            singularity (and the terminal radius in idealized mode).
         disk_enabled: Whether the Novikov-Thorne disk is rendered.
         disk_outer_radius: Outer disk edge in units of M. The engine
             clamps the effective value above the spin-dependent ISCO.
@@ -109,6 +119,7 @@ class RenderSettings:
     momentum_bailout: float = 1e3
     background: BackgroundMode = BackgroundMode.CHECKERBOARD
     interior_mode: bool = False
+    interior_journey: str = "realistic"
     interior_stop: float = 0.02
     disk_enabled: bool = True
     disk_outer_radius: float = 18.0
@@ -136,6 +147,10 @@ class RenderSettings:
             raise ValueError("capture_margin must be non-negative")
         if self.momentum_bailout <= 1.0:
             raise ValueError("momentum_bailout must exceed 1")
+        if self.interior_journey not in ("realistic", "idealized"):
+            raise ValueError(
+                "interior_journey must be realistic or idealized"
+            )
         if not 1e-4 <= self.interior_stop <= 1.0:
             raise ValueError("interior_stop must be in [1e-4, 1] M")
         if self.disk_outer_radius <= 1.0:

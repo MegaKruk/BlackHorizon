@@ -39,12 +39,39 @@ class InfallState:
         spacetime: KerrSpacetime,
         state: numpy.ndarray,
         stop_radius: float,
+        journey: str = "realistic",
     ) -> None:
         self.spacetime = spacetime
+        self.base_stop_radius = float(stop_radius)
+        self.journey = journey
+        self.stop_radius = self._terminal_radius(journey)
         self.state = state
-        self.stop_radius = float(stop_radius)
         self.elapsed_tau = 0.0
+        self._forced_termination = False
         self.remaining_tau = self.lookahead_remaining_tau()
+
+    def _terminal_radius(self, journey: str) -> float:
+        """Terminal surface for the chosen journey mode.
+
+        Realistic: the Cauchy horizon for spinning holes (the blue
+        sheet ends the infall there). Idealized: the requested stop
+        radius, continuing into the inner region of exact vacuum Kerr.
+        """
+        inner = float(
+            getattr(self.spacetime, "inner_horizon_radius", 0.0)
+        )
+        if journey == "idealized":
+            return self.base_stop_radius
+        return max(self.base_stop_radius, inner * 1.02)
+
+    def set_journey(self, journey: str) -> None:
+        """Switch journey mode mid-flight; recomputes the countdown."""
+        if journey == self.journey:
+            return
+        self.journey = journey
+        self.stop_radius = self._terminal_radius(journey)
+        if not self.terminated():
+            self.remaining_tau = self.lookahead_remaining_tau()
 
     @classmethod
     def from_crossing(
@@ -52,6 +79,7 @@ class InfallState:
         spacetime: KerrSpacetime,
         position: numpy.ndarray,
         stop_radius: float,
+        journey: str = "realistic",
     ) -> "InfallState":
         """Start an infall at the given position on the rain worldline.
 
@@ -62,7 +90,9 @@ class InfallState:
         pos = numpy.asarray(position, dtype=float)[None, :]
         velocity = rain_four_velocity(spacetime, pos)
         momentum = lower_index(spacetime, pos, velocity)
-        return cls(spacetime, build_state(pos, momentum), stop_radius)
+        return cls(
+            spacetime, build_state(pos, momentum), stop_radius, journey
+        )
 
     @property
     def position(self) -> numpy.ndarray:
@@ -87,7 +117,43 @@ class InfallState:
 
     def terminated(self) -> bool:
         """Whether the worldline has reached the terminal radius."""
-        return self.radius <= self.stop_radius
+        return self._forced_termination or self.radius <= self.stop_radius
+
+    @property
+    def termination_reason(self) -> str:
+        """Why the worldline ended: surface, chart, or none.
+
+        "surface": reached the terminal radius (the singularity stop,
+        or the Cauchy horizon in realistic mode). "chart": the state
+        left the well-conditioned region of the single stationary
+        Kerr-Schild chart, which in idealized mode happens at the ring
+        plane (the gateway to negative r) or when an outgoing branch
+        asymptotes the Cauchy horizon trying to exit into the next
+        universe of the maximal extension.
+        """
+        if not self.terminated():
+            return "none"
+        if self.radius <= self.stop_radius * 1.5:
+            return "surface"
+        return "chart"
+
+    def _renormalize(self) -> bool:
+        """Restore the timelike mass shell against integration drift.
+
+        The Hamiltonian is exactly -1/2 on the worldline; stiff fields
+        near the terminal radius can drift it. Rescaling the covariant
+        momentum by sqrt(1 / (-2H)) restores the shell exactly while
+        preserving the direction. Returns False when the state is
+        beyond repair (H >= 0 or non-finite), which forces termination.
+        """
+        from ..geodesics import hamiltonian
+
+        value = float(hamiltonian(self.spacetime, self.state)[0])
+        if not numpy.isfinite(value) or value >= -1e-6:
+            return False
+        if abs(value + 0.5) > 1e-9:
+            self.state[:, 4:8] *= math.sqrt(0.5 / (-value))
+        return True
 
     def _substep(self, radius: float, budget: float) -> float:
         """Radius-adaptive proper-time substep.
@@ -110,15 +176,21 @@ class InfallState:
 
         remaining = dtau
         while remaining > 0.0 and not self.terminated():
+            previous = self.state.copy()
             h_val = self._substep(self.radius, remaining)
             self.state = rk4_step(
                 rhs, self.state, numpy.array([h_val])
             )
             self.elapsed_tau += h_val
             remaining -= h_val
-            if not numpy.isfinite(self.state).all():
-                # Safety net: a diverged state counts as terminated.
-                self.state[:, 1:4] = 0.0
+            if not numpy.isfinite(self.state).all() or not (
+                self._renormalize()
+            ):
+                # Safety net: keep the last well-conditioned state so
+                # the camera and tetrad stay valid, and end the
+                # worldline there.
+                self.state = previous
+                self._forced_termination = True
                 break
         self.remaining_tau = max(0.0, self.remaining_tau - dtau)
 

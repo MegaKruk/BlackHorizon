@@ -680,3 +680,85 @@ Validated physics anchors (tests/test_interior.py and friends):
   near-singularity analysis and are exercised by GL and offline tests.
 
 Suite: 115 tests passing (105 exterior from Stages 1-4, 10 interior).
+
+### Stage 5 field fixes: Kerr interior termination and GPU stability
+
+Field testing on an RTX 3070 (spin 0.9, the app default) surfaced two
+defects with one root cause: Stage 5's Schwarzschild-class plunge
+logic let both the camera worldline and the rays pass the inner
+(Cauchy) horizon. Between the horizons r is timelike and strictly
+decreasing, but inside r_minus it turns spacelike again: the worldline
+left the mass shell under the stiff near-ring fields (Hamiltonian
+drifting from -1/2 to +76 within two frames), the camera 4-velocity
+went non-timelike, and tetrad construction raised. Separately, at the
+ultra preset (2048 steps, full resolution) rays penetrating past
+r_minus blueshift exponentially in the blue-sheet region, the
+momentum-clamped steps collapse, and a single draw call exceeds the
+GPU driver watchdog: the reported hard system hang.
+
+The fix is the physically correct one and anticipates Stage 6: for
+spinning holes the terminal surface is the Cauchy horizon. Realistic
+infall ends at the infinitely blueshifted blue sheet there
+(Poisson-Israel mass inflation), and Dafermos-Luk (arXiv:1710.01722)
+guarantee the geometry down to that surface matches exact Kerr, so
+everything Stage 5 renders remains exact. Idealized continuation past
+r_minus stays Stage 6 material behind an explicit label. Concretely:
+
+- InfallState clamps its stop radius to max(stop, 1.02 r_minus), and
+  monotonicity of r between the horizons guarantees termination.
+- The worldline renormalizes its momentum to the exact mass shell
+  each frame (drift-proof against stiff fields); an irrecoverable
+  state restores the last well-conditioned one and terminates there,
+  never handing the renderer a degenerate position.
+- The engine sends rays the same terminal surface (u_interior_stop is
+  clamped to 1.02 r_minus) so no ray integrates the blue-sheet
+  region, wraps tetrad construction with a rain-observer fallback,
+  and clamps degenerate camera positions onto the terminal sphere.
+- Interior rendering caps its step budget at 1024 (interior views
+  have no photon-shell winding needing ultra's 2048), bounding the
+  worst-case draw call below the watchdog; the reference mirrors the
+  cap and the interior step floor exactly.
+
+Regression coverage: Kerr crossing with per-frame tetrad construction
+through termination and beyond, thrust spam through the full plunge,
+a GL render with a deliberately corrupted camera 4-velocity, and
+Schwarzschild stop-radius invariance. Suite: 119 tests passing.
+
+### Journey modes: realistic and idealized (user selectable)
+
+Following the field decision, both stances on the Cauchy horizon are
+now user options, with an explicit statement of the simulation's
+standing assumptions: the observer is an indestructible test particle
+(the same grant that lets them survive the radiation environment and
+tidal forces outside), and whether anything exists beyond the Cauchy
+horizon is not testable today; current astrophysics says it does not
+survive in real holes, and the simulator defaults accordingly.
+
+- realistic (default): the journey of a spinning hole terminates at
+  the Cauchy horizon, where the blue sheet ends any physical infall.
+  Everything rendered is exact Kerr (Dafermos-Luk continuity).
+- idealized: continue into the inner region of exact eternal vacuum
+  Kerr, clearly labeled non-physical. The single stationary ingoing
+  Kerr-Schild chart covers the inward crossing of both horizons, and
+  interior cameras there see the outside universe through the Cauchy
+  horizon (about 89 percent of the sky at r = 0.4 for a = 0.9,
+  reference validated). Radius may legally increase inside r_minus.
+  Two worldline classes leave the chart and terminate with reason
+  "chart": trajectories reaching the ring plane (the gateway to the
+  negative-r antiverse, which needs the second sheet of the radius
+  quartic and remains future work), and outgoing branches that
+  asymptote the Cauchy horizon attempting the maximal-extension exit
+  into another universe. The mass shell is held exactly by per-frame
+  renormalization; the mode is switchable mid-flight from the panel
+  (--journey in the offline CLI).
+
+The offline Doran-family builder was corrected in the process: the
+E-parameterized radial infall momentum p = (-E, w l) must align with
+the Kerr-Schild null vector l, which coincides with the radial
+direction only at zero spin; the mass-shell verification caught the
+inconsistency at a = 0.9.
+
+Suite: 124 tests passing, including rain across the Cauchy horizon
+with the Hamiltonian held to 1e-6, the legal radius increase inside
+r_minus, chart-boundary classification, live journey switching, and
+GL rendering from inside the Cauchy horizon in both modes.

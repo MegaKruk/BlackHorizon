@@ -265,3 +265,217 @@ class TestDoomedObserver:
         w_rain = -root / (1.0 + root)
         tau_rain = lifetime(numpy.array([[-1.0, w_rain, 0.0, 0.0]]))
         assert tau_rain < tau_maximal
+
+
+class TestKerrInteriorTermination:
+    """Spinning holes: the journey ends at the Cauchy horizon.
+
+    Regression tests for a field-reported crash: with spin 0.9 the
+    worldline formerly penetrated the inner horizon, where r turns
+    spacelike again and the state left the mass shell, making the
+    camera 4-velocity non-timelike and crashing tetrad construction.
+    Realistically the blue sheet at r_minus ends the infall
+    (Poisson-Israel mass inflation; Dafermos-Luk arXiv:1710.01722).
+    """
+
+    def test_worldline_terminates_at_cauchy_horizon(self):
+        from blackhorizon.realtime.infall import InfallState
+
+        spacetime = KerrSpacetime(spin=0.9)
+        position = numpy.array(
+            [spacetime.outer_horizon_radius * 0.999, 0.1, 0.05]
+        )
+        infall = InfallState.from_crossing(spacetime, position, 0.02)
+        assert (
+            infall.stop_radius
+            >= spacetime.inner_horizon_radius * 1.01
+        )
+        forward = numpy.array([1.0, 0.0, 0.0])
+        up = numpy.array([0.0, 0.0, 1.0])
+        for _ in range(3000):
+            if infall.terminated():
+                break
+            infall.advance(0.016 * 0.2)
+            # The user-facing crash path: tetrad construction from the
+            # camera state must succeed on every frame.
+            build_tetrad(
+                spacetime, infall.position, infall.four_velocity,
+                forward, up,
+            )
+        assert infall.terminated()
+        assert infall.radius >= spacetime.inner_horizon_radius
+        assert bool(numpy.isfinite(infall.state).all())
+        # Post-termination frames keep rendering (the app does not stop).
+        for _ in range(5):
+            infall.advance(0.01)
+            build_tetrad(
+                spacetime, infall.position, infall.four_velocity,
+                forward, up,
+            )
+
+    def test_thrust_spam_through_kerr_plunge(self):
+        """Mashing the thrusters all the way down must stay stable."""
+        from blackhorizon.realtime.infall import InfallState
+
+        spacetime = KerrSpacetime(spin=0.9)
+        position = numpy.array(
+            [spacetime.outer_horizon_radius * 0.998, 0.05, 0.02]
+        )
+        infall = InfallState.from_crossing(spacetime, position, 0.02)
+        forward = numpy.array([0.3, 0.9, 0.1])
+        forward /= numpy.linalg.norm(forward)
+        up = numpy.array([0.0, 0.0, 1.0])
+        for _ in range(3000):
+            if infall.terminated():
+                break
+            infall.advance(0.016 * 0.2)
+            infall.thrust(
+                numpy.array([1.0, 0.3, 0.0]), 0.8 * 0.016, forward, up,
+                recompute_lookahead=False,
+            )
+        assert infall.terminated()
+        assert bool(numpy.isfinite(infall.state).all())
+
+    def test_schwarzschild_stop_unchanged(self):
+        from blackhorizon.realtime.infall import InfallState
+
+        spacetime = KerrSpacetime(spin=0.0)
+        infall = InfallState.from_crossing(
+            spacetime, numpy.array([1.99, 0.0, 0.0]), 0.02
+        )
+        assert abs(infall.stop_radius - 0.02) < 1e-12
+
+
+class TestIdealizedJourney:
+    """The labeled idealized continuation into exact vacuum Kerr.
+
+    The single stationary ingoing Kerr-Schild chart covers the inward
+    crossing of both horizons; worldlines that reach the ring plane
+    (the gateway to negative r) or turn outward and asymptote the
+    Cauchy horizon leave the chart and terminate with reason "chart".
+    """
+
+    def test_rain_continues_past_cauchy_horizon(self):
+        from blackhorizon.realtime.infall import InfallState
+
+        spacetime = KerrSpacetime(spin=0.9)
+        r_minus = spacetime.inner_horizon_radius
+        position = numpy.array(
+            [spacetime.outer_horizon_radius * 0.999, 0.1, 0.05]
+        )
+        infall = InfallState.from_crossing(
+            spacetime, position, 0.02, journey="idealized"
+        )
+        assert abs(infall.stop_radius - 0.02) < 1e-12
+        crossed = False
+        for _ in range(5000):
+            if infall.terminated():
+                break
+            infall.advance(0.016 * 0.2)
+            if infall.radius < r_minus:
+                crossed = True
+                # The mass shell holds through the Cauchy horizon.
+                value = float(
+                    hamiltonian(spacetime, infall.state)[0]
+                )
+                assert abs(value + 0.5) < 1e-6
+        assert crossed, "must cross the Cauchy horizon inward"
+        assert infall.terminated()
+        assert infall.radius < r_minus
+        assert bool(numpy.isfinite(infall.state).all())
+
+    def test_outward_branch_ends_at_chart_boundary(self):
+        """Inside r_minus the radius may legally increase; the branch
+        trying to exit into the next universe leaves the chart."""
+        import math
+
+        from blackhorizon.frames import lower_index
+        from blackhorizon.realtime.infall import InfallState
+
+        spacetime = KerrSpacetime(spin=0.9)
+        position = numpy.array([[0.35, 0.0, 0.1]])
+        u_rain = rain_four_velocity(spacetime, position)
+        tetrad = build_tetrad(
+            spacetime,
+            position[0],
+            u_rain[0],
+            numpy.array([1.0, 0.0, 0.0]),
+            numpy.array([0.0, 0.0, 1.0]),
+        )
+        boosted = (
+            math.cosh(1.2) * tetrad[0] + math.sinh(1.2) * tetrad[1]
+        )
+        momentum = lower_index(spacetime, position, boosted[None, :])
+        infall = InfallState(
+            spacetime,
+            build_state(position, momentum),
+            0.02,
+            journey="idealized",
+        )
+        radii = [infall.radius]
+        for _ in range(2000):
+            if infall.terminated():
+                break
+            infall.advance(0.005)
+            radii.append(infall.radius)
+        assert max(radii) > radii[0] + 0.1, (
+            "radius must legally increase inside the Cauchy horizon"
+        )
+        assert infall.terminated()
+        assert infall.termination_reason == "chart"
+        assert bool(numpy.isfinite(infall.state).all())
+
+    def test_camera_inside_cauchy_horizon_sees_sky(self):
+        spacetime = KerrSpacetime(spin=0.9)
+        position = numpy.array([0.4, 0.05, 0.1])
+        u = rain_four_velocity(spacetime, position[None, :])[0]
+        tetrad = build_tetrad(
+            spacetime,
+            position,
+            u,
+            numpy.array([1.0, 0.0, 0.0]),
+            numpy.array([0.0, 0.0, 1.0]),
+        )
+        momenta = tetrad_ray_momenta(
+            spacetime, position, tetrad, fibonacci_sphere(300)
+        )
+        state0 = build_state(
+            numpy.tile(position[None, :], (300, 1)), momenta
+        )
+        settings = RenderSettings(
+            spin=0.9,
+            interior_mode=True,
+            interior_journey="idealized",
+            disk_enabled=False,
+        ).apply_preset(QualityPreset.HIGH)
+        result = trace_like_shader(
+            spacetime,
+            state0,
+            settings,
+            escape_radius=400.0,
+            interior_stop=0.02,
+        )
+        escaped = float(
+            (result.status == int(RayStatus.ESCAPED)).mean()
+        )
+        assert escaped > 0.5, (
+            "the outside universe is visible through the Cauchy "
+            f"horizon (escaped {escaped})"
+        )
+
+    def test_live_journey_switch_updates_terminal_surface(self):
+        from blackhorizon.realtime.infall import InfallState
+
+        spacetime = KerrSpacetime(spin=0.9)
+        position = numpy.array(
+            [spacetime.outer_horizon_radius * 0.99, 0.0, 0.05]
+        )
+        infall = InfallState.from_crossing(
+            spacetime, position, 0.02, journey="realistic"
+        )
+        realistic_stop = infall.stop_radius
+        assert realistic_stop >= spacetime.inner_horizon_radius
+        infall.set_journey("idealized")
+        assert abs(infall.stop_radius - 0.02) < 1e-12
+        infall.set_journey("realistic")
+        assert abs(infall.stop_radius - realistic_stop) < 1e-12

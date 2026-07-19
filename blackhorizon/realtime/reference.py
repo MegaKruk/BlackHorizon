@@ -91,7 +91,11 @@ def trace_like_shader(
     hit_positions = numpy.full((n, 3), numpy.nan)
     hit_momenta = numpy.full((n, 4), numpy.nan)
 
-    for _ in range(settings.max_steps):
+    max_steps = settings.max_steps
+    if interior_stop is not None:
+        # Mirror the shader's interior step-budget cap.
+        max_steps = min(max_steps, 1024)
+    for _ in range(max_steps):
         idx = numpy.nonzero(active)[0]
         if idx.size == 0:
             break
@@ -116,9 +120,18 @@ def trace_like_shader(
         y = y[keep]
         radius = radius[keep]
 
-        scale_length = numpy.where(
-            radius > r_plus, radius - r_plus, 0.5 * radius
-        )
+        if interior_stop is None:
+            scale_length = radius - r_plus
+        else:
+            # Interior cameras: floor near the horizon (regular in
+            # Kerr-Schild; rays linger while crossing), cap at r/2 so
+            # steps shrink toward the singularity.
+            scale_length = numpy.minimum(
+                numpy.maximum(
+                    numpy.abs(radius - r_plus), 0.15 * radius
+                ),
+                0.5 * radius,
+            )
         h = numpy.clip(
             settings.step_scale * scale_length,
             settings.min_step,

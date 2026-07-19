@@ -41,9 +41,11 @@ def radial_momentum(
 ) -> numpy.ndarray:
     """Covariant momentum of a radial infaller with conserved energy.
 
-    Solves the timelike mass shell for p = (-E, w l) and selects the
-    future-directed root; for E = 0 the state exists only inside the
-    horizon (it is momentarily at rest at the horizon itself).
+    Solves the timelike mass shell for p = (-E, w l) with l the
+    Kerr-Schild null vector (the E-parameterized Doran family; rain is
+    E = 1) and selects the future-directed root; for E = 0 the state
+    exists only inside the horizon (it is momentarily at rest at the
+    horizon itself). At zero spin l is the radial direction.
 
     Args:
         spacetime: The Kerr spacetime.
@@ -67,9 +69,12 @@ def radial_momentum(
         4.0 * h_field * p_t,
         1.0 - (1.0 + 2.0 * h_field) * p_t**2,
     ]
+    l_vector = spacetime.geometry(
+        pos[:, 0], pos[:, 1], pos[:, 2]
+    ).l[0]
     for w in sorted(numpy.roots(coefficients).real, reverse=True):
         momentum = numpy.array([[p_t, 0.0, 0.0, 0.0]])
-        momentum[0, 1:4] = w * pos[0] / numpy.linalg.norm(pos[0])
+        momentum[0, 1:4] = w * l_vector
         state = build_state(pos, momentum)
         if abs(float(hamiltonian(spacetime, state)[0]) + 0.5) > 1e-9:
             continue
@@ -125,6 +130,16 @@ def build_plunge(
         step_now = float(min(step, max(0.04 * radius**1.5, 1e-6)))
         h[0] = step_now
         state = rk4_step(rhs, state, h)
+        # Hold the timelike mass shell against stiff-field drift and
+        # stop at the chart boundary (the ring plane or a Cauchy
+        # horizon exit) instead of integrating garbage.
+        value = float(hamiltonian(spacetime, state)[0])
+        if not numpy.isfinite(state).all() or not numpy.isfinite(
+            value
+        ) or value >= -1e-6:
+            break
+        if abs(value + 0.5) > 1e-9:
+            state[:, 4:8] *= numpy.sqrt(0.5 / (-value))
         taus.append(taus[-1] + step_now)
         states.append(state[0].copy())
         radius = float(
@@ -183,8 +198,26 @@ def render_plunge(args: argparse.Namespace) -> None:
         start_radius = min(
             start_radius, spacetime.outer_horizon_radius * 0.995
         )
+    stop = args.stop
+    inner = float(spacetime.inner_horizon_radius)
+    if args.journey == "idealized" and inner > 0.0:
+        print(
+            "idealized journey: continuing past the Cauchy horizon "
+            "into exact vacuum Kerr (labeled non-physical for real "
+            "black holes)"
+        )
+    elif inner > 0.0 and stop < inner * 1.02:
+        # Realistic terminal surface for spinning holes: the Cauchy
+        # horizon, where the blue sheet ends any physical infall
+        # (Poisson-Israel mass inflation; Dafermos-Luk
+        # arXiv:1710.01722). Idealized continuation is Stage 6.
+        stop = inner * 1.02
+        print(
+            f"spin {args.spin}: journey terminates at the Cauchy "
+            f"horizon, stop raised to {stop:.4f} M"
+        )
     taus, states = build_plunge(
-        spacetime, start_radius, energy, args.stop
+        spacetime, start_radius, energy, stop
     )
     total = float(taus[-1])
     print(
@@ -225,7 +258,7 @@ def render_plunge(args: argparse.Namespace) -> None:
             settings,
             progress=False,
             camera_tetrad=tetrad,
-            interior_stop=args.stop,
+            interior_stop=stop,
         )
         image = develop(hdr, exposure=args.exposure)
         path = output_dir / f"plunge_{index:03d}.png"
@@ -251,6 +284,14 @@ def main() -> None:
     parser.add_argument("--energy", type=float, default=1.5)
     parser.add_argument("--start-radius", type=float, default=6.0)
     parser.add_argument("--stop", type=float, default=0.02)
+    parser.add_argument(
+        "--journey",
+        choices=("realistic", "idealized"),
+        default="realistic",
+        help="at the Cauchy horizon of a spinning hole: terminate "
+        "(realistic, the blue sheet) or continue into exact vacuum "
+        "Kerr (idealized)",
+    )
     parser.add_argument(
         "--span",
         type=float,

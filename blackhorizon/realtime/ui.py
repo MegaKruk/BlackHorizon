@@ -85,17 +85,43 @@ class SettingsPanel:
                 imgui.ImVec4(1.0, 0.35, 0.25, 1.0),
                 f"INSIDE THE HORIZON  r = {infall.radius:.3f} M",
             )
+            inner = 1.0 - math.sqrt(
+                max(0.0, 1.0 - settings.spin * settings.spin)
+            )
+            if (
+                settings.interior_journey == "idealized"
+                and inner > 0.0
+                and infall.radius < inner
+            ):
+                imgui.text_colored(
+                    imgui.ImVec4(0.4, 0.85, 1.0, 1.0),
+                    "beyond the Cauchy horizon (idealized vacuum "
+                    "Kerr)",
+                )
             if infall.terminated():
-                imgui.text_colored(
-                    imgui.ImVec4(1.0, 0.2, 0.2, 1.0),
-                    "worldline ended at the central singularity",
-                )
+                if infall.termination_reason == "chart":
+                    imgui.text_colored(
+                        imgui.ImVec4(1.0, 0.2, 0.2, 1.0),
+                        "chart boundary: ring plane or Cauchy "
+                        "horizon exit",
+                    )
+                else:
+                    imgui.text_colored(
+                        imgui.ImVec4(1.0, 0.2, 0.2, 1.0),
+                        "worldline ended at the terminal surface",
+                    )
             else:
-                imgui.text_colored(
-                    imgui.ImVec4(1.0, 0.55, 0.2, 1.0),
-                    "proper time to singularity: "
-                    f"{infall.remaining_tau:6.3f} M",
-                )
+                if infall.remaining_tau >= 59.9:
+                    imgui.text_colored(
+                        imgui.ImVec4(1.0, 0.55, 0.2, 1.0),
+                        "no terminal surface on current path",
+                    )
+                else:
+                    imgui.text_colored(
+                        imgui.ImVec4(1.0, 0.55, 0.2, 1.0),
+                        "proper time remaining: "
+                        f"{infall.remaining_tau:6.3f} M",
+                    )
                 imgui.text(
                     f"proper time inside: {infall.elapsed_tau:6.3f} M"
                 )
@@ -119,6 +145,18 @@ class SettingsPanel:
         changed, value = imgui.checkbox("overlays", overlay_enabled)
         if changed:
             actions["overlay_enabled"] = value
+        imgui.text("journey past the Cauchy horizon:")
+        if imgui.radio_button(
+            "realistic (blue sheet)",
+            settings.interior_journey == "realistic",
+        ):
+            settings.interior_journey = "realistic"
+        imgui.same_line()
+        if imgui.radio_button(
+            "idealized Kerr",
+            settings.interior_journey == "idealized",
+        ):
+            settings.interior_journey = "idealized"
         if overlay_enabled:
             self._draw_light_cone_glyph(settings, camera, infall)
 

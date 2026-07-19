@@ -128,21 +128,49 @@ class KerrRenderEngine:
         interior = bool(getattr(settings, "interior_mode", False))
         if not interior:
             return {"u_interior_mode": 0, "u_interior_stop": 0.0}
-        position = camera.position
+        position = numpy.asarray(camera.position, dtype=float)
+        stop = float(getattr(settings, "interior_stop", 0.02))
+        radius = float(numpy.linalg.norm(position))
+        if not numpy.isfinite(position).all() or radius < stop:
+            # Clamp a degenerate position onto the terminal sphere so
+            # the metric stays well conditioned.
+            direction = (
+                position / radius
+                if radius > 1e-9
+                else numpy.array([1.0, 0.0, 0.0])
+            )
+            position = direction * max(stop, 1e-3)
         four_velocity = getattr(camera, "four_velocity", None)
-        if four_velocity is None:
-            four_velocity = rain_four_velocity(
-                spacetime, position[None, :]
-            )[0]
         forward, right, up = camera.basis()
-        tetrad = build_tetrad(
-            spacetime, position, four_velocity, forward, up
-        )
+        try:
+            if four_velocity is None or not numpy.isfinite(
+                four_velocity
+            ).all():
+                raise ValueError("missing or non-finite 4-velocity")
+            tetrad = build_tetrad(
+                spacetime, position, four_velocity, forward, up
+            )
+        except ValueError:
+            # An ill-conditioned worldline state must never take down
+            # the frame; fall back to the rain observer here, which is
+            # regular everywhere outside the terminal sphere.
+            tetrad = build_tetrad(
+                spacetime,
+                position,
+                rain_four_velocity(spacetime, position[None, :])[0],
+                forward,
+                up,
+            )
+        journey = getattr(settings, "interior_journey", "realistic")
+        if journey == "idealized":
+            effective_stop = stop
+        else:
+            effective_stop = max(
+                stop, float(spacetime.inner_horizon_radius) * 1.02
+            )
         return {
             "u_interior_mode": 1,
-            "u_interior_stop": float(
-                getattr(settings, "interior_stop", 0.02)
-            ),
+            "u_interior_stop": effective_stop,
             "u_tetrad_time": tuple(tetrad[0]),
             "u_tetrad_forward": tuple(tetrad[1]),
             "u_tetrad_right": tuple(tetrad[2]),

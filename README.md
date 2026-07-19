@@ -186,6 +186,22 @@ proper time on the rain (free-fall) trajectory. Inside:
 - The light-cone overlay draws the river-model inflow: inside, both
   cone edges point inward.
 - The reset camera button (or R) is the only way out.
+- For a spinning hole the panel offers two journey modes past the
+  inner (Cauchy) horizon. Realistic (default): the journey ends
+  there, where the infinitely blueshifted blue sheet terminates any
+  physical infall (mass inflation). Idealized Kerr: continue into
+  the inner region of exact eternal vacuum Kerr, clearly labeled as
+  non-physical for real black holes; inside the Cauchy horizon your
+  radius can legally increase again, the outside universe stays
+  visible through the horizon above you, and the journey ends at the
+  ring plane or when an outgoing branch reaches the edge of the
+  coordinate chart. Switchable mid-flight; --journey selects it in
+  the offline plunge CLI. Standing assumptions either way: you are
+  an indestructible test observer (radiation and tides are already
+  waived outside), and the idealized region reflects the eternal
+  vacuum solution, not a prediction about real holes. The
+  Schwarzschild plunge (--spin 0) always runs the full distance to
+  the central singularity.
 
 Offline, render a maximum-fidelity plunge:
 

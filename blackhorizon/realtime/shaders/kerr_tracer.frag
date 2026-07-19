@@ -296,8 +296,14 @@ void main() {
     int status = 0;
     vec3 dx_final = dir;
     vec3 disk_color = vec3(0.0);
+    // Interior views have no photon-shell winding that needs the
+    // ultra preset's full budget; capping bounds the worst-case draw
+    // call below the driver watchdog at high pixel counts.
+    int step_budget = u_interior_mode == 1
+        ? min(u_max_steps, 1024)
+        : u_max_steps;
     for (int i = 0; i < MAX_STEPS; i++) {
-        if (i >= u_max_steps) {
+        if (i >= step_budget) {
             break;
         }
         float r = kerr_schild_radius(pos);
@@ -314,13 +320,16 @@ void main() {
         }
         // Distance-based step heuristic, validated against the adaptive
         // Stage 1 tracer in tests/test_realtime_reference.py.
-        // Piecewise scale: outside the horizon, distance to the horizon
-        // (validated against the adaptive Stage 1 tracer); inside, r/2,
-        // since no photon orbits exist there, Kerr-Schild is regular at
-        // the crossing, and steps must shrink toward the singularity.
-        float scale_length = r > u_horizon_radius
-            ? (r - u_horizon_radius)
-            : 0.5 * r;
+        // Step scale. Exterior cameras keep the validated
+        // (r - r_plus) heuristic, whose fine near-horizon resolution
+        // the winding photon-shell rays need. Interior cameras floor
+        // it at 0.15 r: Kerr-Schild is regular at the crossing, rays
+        // legitimately linger there, and without the floor every such
+        // ray crawls at min_step and a single frame can hang the GPU;
+        // the 0.5 r cap keeps steps shrinking toward the singularity.
+        float scale_length = u_interior_mode == 1
+            ? min(max(abs(r - u_horizon_radius), 0.15 * r), 0.5 * r)
+            : (r - u_horizon_radius);
         float h_step = clamp(
             u_step_scale * scale_length, u_min_step, u_max_step
         );

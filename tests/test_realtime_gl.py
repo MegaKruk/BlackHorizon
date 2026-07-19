@@ -281,3 +281,74 @@ class TestInteriorGL:
         disk_pixels = image.reshape(-1, 3)[ref_disk]
         assert disk_pixels.shape[0] > 100
         assert float(disk_pixels.max()) > 150
+
+    def test_kerr_interior_render_survives_deep_camera(self, gl_context):
+        """Spin 0.9 interior rendering near the Cauchy horizon: rays
+        terminate at the blue-sheet surface, the frame renders finite,
+        and an ill-conditioned camera state cannot crash the engine
+        (field-reported regression)."""
+        from blackhorizon.frames import rain_four_velocity
+
+        spacetime = KerrSpacetime(spin=0.9)
+        settings = RenderSettings(
+            spin=0.9,
+            interior_mode=True,
+            disk_enabled=True,
+            background=BackgroundMode.STARFIELD,
+        ).apply_preset(QualityPreset.HIGH)
+        position = numpy.array(
+            [spacetime.inner_horizon_radius * 1.25, 0.05, 0.02]
+        )
+        camera = FlyCamera(position=position.copy(), yaw=0.0, pitch=0.0)
+        camera.four_velocity = rain_four_velocity(
+            spacetime, position[None, :]
+        )[0]
+        engine = KerrRenderEngine(gl_context)
+        try:
+            image = engine.read_frame(settings, camera, 96, 64)
+            stop = float(engine.program["u_interior_stop"].value)
+            assert stop >= spacetime.inner_horizon_radius
+            assert bool(numpy.isfinite(image).all())
+            # A corrupted camera state falls back to the rain tetrad
+            # instead of raising.
+            camera.four_velocity = numpy.array(
+                [0.1, 5.0, 0.0, 0.0]
+            )
+            image = engine.read_frame(settings, camera, 64, 40)
+            assert bool(numpy.isfinite(image).all())
+        finally:
+            engine.release()
+
+    def test_idealized_render_inside_cauchy_horizon(self, gl_context):
+        """Idealized journey mode: the GLSL path renders finite frames
+        from inside the Cauchy horizon showing the outside universe,
+        and the ray terminal surface follows the journey setting."""
+        from blackhorizon.frames import rain_four_velocity
+
+        spacetime = KerrSpacetime(spin=0.9)
+        settings = RenderSettings(
+            spin=0.9,
+            interior_mode=True,
+            interior_journey="idealized",
+            disk_enabled=False,
+            background=BackgroundMode.STARFIELD,
+            exposure=1.6,
+        ).apply_preset(QualityPreset.HIGH)
+        position = numpy.array([0.4, 0.05, 0.1])
+        camera = FlyCamera(position=position.copy(), yaw=0.0, pitch=0.0)
+        camera.four_velocity = rain_four_velocity(
+            spacetime, position[None, :]
+        )[0]
+        engine = KerrRenderEngine(gl_context)
+        try:
+            image = engine.read_frame(settings, camera, 96, 64)
+            stop = float(engine.program["u_interior_stop"].value)
+            assert stop < spacetime.inner_horizon_radius
+            assert bool(numpy.isfinite(image).all())
+            assert float((image.max(axis=-1) > 4).mean()) > 0.02
+            settings.interior_journey = "realistic"
+            engine.read_frame(settings, camera, 64, 40)
+            stop = float(engine.program["u_interior_stop"].value)
+            assert stop >= spacetime.inner_horizon_radius
+        finally:
+            engine.release()
