@@ -28,6 +28,11 @@ from ..backend import get_xp, to_numpy, xp_of
 from ..emission.blackbody import blackbody_lut
 from ..emission.novikov_thorne import disk_inner_radius, temperature_lut
 from ..emission.redshift import redshift_factor, static_observer_lapse
+from ..emission.bluesheet import (
+    SHEET_COLOR,
+    blueshift_amplification,
+    sheet_radiance,
+)
 from ..frames import tetrad_ray_momenta
 from ..geodesics import build_state, geodesic_rhs, null_momentum_from_velocity
 from ..imaging import save_png
@@ -227,14 +232,21 @@ def _trace_tile(
         radius = spacetime.kerr_schild_radius(y[:, 1], y[:, 2], y[:, 3])
         captured = radius <= capture_radius
         if interior_stop is not None:
-            # A diverging momentum marks a ray ending on the
-            # singularity; classify early instead of resolving the
-            # crawl toward it at full tolerance (the pixel is black
-            # either way).
+            # Diverging momentum marks a ray ending on the terminal
+            # surface (the singularity stop, or the blue sheet at the
+            # inner horizon); classify early instead of resolving the
+            # asymptotic crawl at full tolerance. Rays hovering just
+            # above the surface with firmly growing momentum are
+            # already on it: capturing them at a much lower threshold
+            # keeps sheet frames tractable.
             momentum_norm = xp.sqrt(
                 xp.sum(y[:, 5:8] * y[:, 5:8], axis=-1)
             )
-            captured = captured | (momentum_norm > 3.0e3)
+            captured = captured | (momentum_norm > 1.0e3)
+            captured = captured | (
+                (radius <= capture_radius * 1.002)
+                & (momentum_norm > 50.0)
+            )
         escaped = ~captured & (radius >= escape_radius)
         exhausted = steps[idx] >= max_steps
         status[idx[captured]] = capture_status
@@ -393,7 +405,16 @@ def _starfield_hdr(
     band = 0.035 * numpy.exp(-((directions[:, 2] / 0.30) ** 2))
     band_color = band[:, None] * numpy.array([1.0, 0.92, 0.80])
     if shift is not None:
-        band_color = band_color * (shift**4)[:, None]
+        # The band blueshifts with everything else: intensity as g^4
+        # and a first-order chromatic slide of its warm tint.
+        slide = numpy.clip(
+            0.35 * numpy.log(numpy.maximum(shift, 1e-6)), -0.6, 0.6
+        )
+        tint = numpy.stack(
+            [1.0 - slide, numpy.ones_like(slide), 1.0 + slide],
+            axis=-1,
+        )
+        band_color = band_color * (shift**4)[:, None] * tint
     color += band_color
     return color
 
@@ -508,8 +529,31 @@ def render_hdr(
     )
     bb_table, bb_log_min, bb_log_max = blackbody_lut(size=1024)
     if camera_tetrad is not None:
-        # Tetrad rays carry unit camera frequency by construction.
-        observer_lapse = 1.0
+        # Tetrad rays carry unit camera frequency by construction; the
+        # blue-sheet amplification of all received external radiation
+        # (active when the terminal surface is the inner horizon, the
+        # realistic journey through a spinning hole) multiplies the
+        # observer lapse, so the exact covariant per-ray shifts carry
+        # the flare without further changes.
+        inner = float(spacetime.inner_horizon_radius)
+        sheet_active = inner > 1e-9 and (
+            interior_stop is not None and interior_stop >= inner * 0.99
+        )
+        camera_radius = float(
+            spacetime.kerr_schild_radius(
+                camera.position[None, 0],
+                camera.position[None, 1],
+                camera.position[None, 2],
+            )[0]
+        )
+        amplification = 1.0
+        if sheet_active:
+            amplification = float(
+                blueshift_amplification(
+                    spacetime, numpy.array([camera_radius])
+                )[0]
+            )
+        observer_lapse = amplification
         escape_radius = max(100.0, 1.3 * disk_outer)
         directions = pinhole_grid(
             width, height, settings.fov_degrees, settings.supersample
@@ -588,13 +632,26 @@ def render_hdr(
         tile_radiance = numpy.zeros(
             (tile_directions.shape[0], 3), dtype=numpy.float64
         )
+        if camera_tetrad is not None and observer_lapse > 1.0:
+            # The blue sheet itself: rays ending on the inner-horizon
+            # terminal surface look into the radiation pileup.
+            terminated = result.status == int(RayStatus.TERMINATED)
+            if terminated.any():
+                glow = float(
+                    sheet_radiance(numpy.array([observer_lapse]))[0]
+                )
+                tile_radiance[terminated] = glow * numpy.array(
+                    SHEET_COLOR, dtype=numpy.float32
+                )
         escaped = result.status == int(RayStatus.ESCAPED)
         if escaped.any():
             shift = None
             if camera_tetrad is not None:
-                # g = nu_cam / nu_sky = 1 / E with unit camera
-                # frequency and the ray's conserved energy E.
-                shift = 1.0 / momenta[escaped, 0]
+                # g = B * nu_cam / nu_sky = B / E with unit camera
+                # frequency, the ray's conserved energy E, and the
+                # blue-sheet amplification B (one outside realistic
+                # spinning interiors).
+                shift = observer_lapse / momenta[escaped, 0]
             tile_radiance[escaped] = _starfield_hdr(
                 result.escape_directions[escaped], shift=shift
             )

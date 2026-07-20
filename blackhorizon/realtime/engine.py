@@ -16,6 +16,12 @@ import moderngl
 import numpy
 
 from ..emission.blackbody import blackbody_lut
+from ..emission.bluesheet import (
+    blueshift_amplification,
+    display_amplification,
+    sheet_radiance,
+    whiteout_fraction,
+)
 from ..emission.novikov_thorne import disk_inner_radius, temperature_lut
 from ..frames import build_tetrad, rain_four_velocity
 from ..kerr import KerrSpacetime
@@ -127,7 +133,13 @@ class KerrRenderEngine:
         """
         interior = bool(getattr(settings, "interior_mode", False))
         if not interior:
-            return {"u_interior_mode": 0, "u_interior_stop": 0.0}
+            return {
+                "u_interior_mode": 0,
+                "u_interior_stop": 0.0,
+                "u_bluesheet_amp": 1.0,
+                "u_sheet_radiance": 0.0,
+                "u_bluesheet_white": 0.0,
+            }
         position = numpy.asarray(camera.position, dtype=float)
         stop = float(getattr(settings, "interior_stop", 0.02))
         radius = float(numpy.linalg.norm(position))
@@ -162,15 +174,41 @@ class KerrRenderEngine:
                 up,
             )
         journey = getattr(settings, "interior_journey", "realistic")
+        inner = float(spacetime.inner_horizon_radius)
         if journey == "idealized":
             effective_stop = stop
         else:
-            effective_stop = max(
-                stop, float(spacetime.inner_horizon_radius) * 1.02
+            effective_stop = max(stop, inner * 1.02)
+        # Blue-sheet amplification: active only for the realistic
+        # journey through a spinning hole; identity otherwise, which
+        # keeps idealized vacuum Kerr and Schwarzschild honest.
+        amplification = 1.0
+        if journey == "realistic" and inner > 1e-9:
+            camera_radius = float(
+                spacetime.kerr_schild_radius(
+                    position[None, 0],
+                    position[None, 1],
+                    position[None, 2],
+                )[0]
             )
+            amplification = float(
+                blueshift_amplification(
+                    spacetime, numpy.array([camera_radius])
+                )[0]
+            )
+        display = float(
+            display_amplification(numpy.array([amplification]))[0]
+        )
+        glow = float(sheet_radiance(numpy.array([display]))[0])
+        white = float(
+            whiteout_fraction(numpy.array([amplification]))[0]
+        )
         return {
             "u_interior_mode": 1,
             "u_interior_stop": effective_stop,
+            "u_bluesheet_amp": display,
+            "u_sheet_radiance": glow,
+            "u_bluesheet_white": white,
             "u_tetrad_time": tuple(tetrad[0]),
             "u_tetrad_forward": tuple(tetrad[1]),
             "u_tetrad_right": tuple(tetrad[2]),
@@ -239,7 +277,11 @@ class KerrRenderEngine:
             spacetime, camera, settings
         )
         if interior_uniforms["u_interior_mode"] == 1:
-            uniforms["u_observer_lapse"] = 1.0
+            # Unit camera frequency times the blue-sheet
+            # amplification: the disk flares with the sky.
+            uniforms["u_observer_lapse"] = interior_uniforms[
+                "u_bluesheet_amp"
+            ]
         uniforms.update(interior_uniforms)
         for name, value in uniforms.items():
             self.program[name].value = value

@@ -352,3 +352,58 @@ class TestInteriorGL:
             assert stop >= spacetime.inner_horizon_radius
         finally:
             engine.release()
+
+    def test_blue_sheet_flare_progression(self, gl_context):
+        """Realistic Kerr interior: the blue-sheet uniforms activate,
+        the view brightens and blue-shifts on approach to the inner
+        horizon, and idealized mode at the same position stays dark
+        with the amplification at identity."""
+        from blackhorizon.frames import rain_four_velocity
+
+        spacetime = KerrSpacetime(spin=0.9)
+        engine = KerrRenderEngine(gl_context)
+        try:
+            def frame(journey, z_radius):
+                settings = RenderSettings(
+                    spin=0.9,
+                    interior_mode=True,
+                    interior_journey=journey,
+                    disk_enabled=False,
+                    background=BackgroundMode.STARFIELD,
+                    exposure=1.4,
+                ).apply_preset(QualityPreset.HIGH)
+                position = numpy.array([0.03, 0.03, z_radius])
+                camera = FlyCamera(
+                    position=position.copy(), yaw=0.0, pitch=-60.0
+                )
+                camera.four_velocity = rain_four_velocity(
+                    spacetime, position[None, :]
+                )[0]
+                image = engine.read_frame(settings, camera, 96, 60)
+                amp = float(engine.program["u_bluesheet_amp"].value)
+                glow = float(
+                    engine.program["u_sheet_radiance"].value
+                )
+                return image, amp, glow
+
+            far, amp_far, _ = frame("realistic", 1.2)
+            close, amp_close, glow_close = frame("realistic", 0.68)
+            assert amp_close > amp_far
+            assert amp_close > 3.0
+            assert glow_close > 0.0
+            assert float(close.mean()) > 4.0 * max(
+                float(far.mean()), 1.0
+            )
+            blue = float(
+                (
+                    close[:, :, 2].astype(int)
+                    > close[:, :, 0].astype(int) + 12
+                ).mean()
+            )
+            assert blue > 0.3
+            ideal, amp_ideal, glow_ideal = frame("idealized", 0.68)
+            assert amp_ideal == 1.0
+            assert glow_ideal == 0.0
+            assert float(ideal.mean()) < 0.3 * float(close.mean())
+        finally:
+            engine.release()

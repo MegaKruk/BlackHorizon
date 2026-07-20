@@ -762,3 +762,54 @@ Suite: 124 tests passing, including rain across the Cauchy horizon
 with the Hamiltonian held to 1e-6, the legal radius increase inside
 r_minus, chart-boundary classification, live journey switching, and
 GL rendering from inside the Cauchy horizon in both modes.
+
+## Stage 6 implementation summary (delivered)
+
+Stage 6 makes the realistic Kerr interior quantitative: the blue
+sheet is now computed and rendered, not just a terminal surface.
+
+Physics model (blackhorizon/emission/bluesheet.py). A real hole is
+illuminated at all advanced times v (starlight, CMB, its own disk);
+radiation entering at v reaches an observer near the Cauchy horizon
+amplified by exp(kappa_minus v) with kappa_minus = (r_plus - r_minus)
+/ (2 (r_minus^2 + a^2)) (Poisson-Israel 1990; Ori 1991;
+Hamilton-Avelino arXiv:0811.1926). Along infalling worldlines the
+near-horizon relation v = -(1/kappa_minus) ln x, with proximity
+x = (r - r_minus)/(r_plus - r_minus), closes the law: every external
+ray is amplified by B = x_match / x below the matching proximity
+(continuous, capped at 60 for the physics readout). Dafermos-Luk
+continuity licenses the split: exact vacuum Kerr supplies the
+geometry, aberration, and covariant per-ray shifts everywhere along
+the approach; the blue sheet enters purely as B multiplying the
+observer lapse, so the disk and starfield flare through the same
+covariant pipeline with no new geometric machinery. Rays terminating
+on the inner-horizon surface render the sheet itself with radiance
+following the B^4 law from a faint base. Idealized journey mode
+(eternal vacuum, no radiation) and Schwarzschild (no inner horizon)
+get identity amplification, keeping both honest.
+
+Display adaptation. The physical amplification diverges; a display,
+like any eye, adapts. The intensity gain caps at B_display = 8
+(4096-fold), preserving per-ray structure through the approach, and
+a smoothstep whiteout ramp over true B in [8, 30] carries the
+divergence to the terminal white bath; the HUD reports the true
+uncapped value. The experiential sequence, validated in GL: dark
+approach, blue glow from about x = 0.35, an intense blue flare near
+x = 0.1 (view mean up 60-fold, blue-dominant), blinding at the
+display cap, whiteout at the wall. Offline applies the identical law
+(observer lapse, starfield shift including a chromatic slide of the
+galactic band, sheet radiance, HDR whiteout mix), so realtime and
+render modes agree.
+
+HUD: a cyan blue-sheet amplification readout ramps during the
+realistic Kerr approach, and the terminal message names the blue
+sheet. All Stage 5 hardening carries over unchanged: Cauchy-horizon
+terminal surfaces, mass-shell renormalization, chart-boundary
+classification, the interior step floor and budget cap, and the
+engine tetrad fallback.
+
+Suite: 130 tests passing, adding the kappa_minus analytic check,
+amplification monotonicity and matching continuity, zero-spin and
+idealized identity, display-law properties, offline flare-brightening
+with idealized darkness at the same position, and the GL flare
+progression.

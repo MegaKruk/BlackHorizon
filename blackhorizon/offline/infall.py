@@ -24,6 +24,7 @@ import pathlib
 
 import numpy
 
+from ..emission.bluesheet import blueshift_amplification, display_amplification
 from ..frames import build_tetrad, raise_index
 from ..geodesics import build_state, geodesic_rhs, hamiltonian
 from ..imaging import save_png
@@ -260,13 +261,35 @@ def render_plunge(args: argparse.Namespace) -> None:
             camera_tetrad=tetrad,
             interior_stop=stop,
         )
-        image = develop(hdr, exposure=args.exposure)
+        # Photographic adaptation: near the blue sheet any camera
+        # stops down; the console still reports the true state.
+        exposure = args.exposure
+        amplification = 1.0
+        if args.journey == "realistic" and inner > 0.0:
+            amplification = float(
+                blueshift_amplification(
+                    spacetime, numpy.array([radius])
+                )[0]
+            )
+            adapted = float(
+                display_amplification(
+                    numpy.array([amplification])
+                )[0]
+            )
+            exposure = args.exposure / adapted**1.5
+        image = develop(hdr, exposure=exposure)
         path = output_dir / f"plunge_{index:03d}.png"
         save_png(image, str(path))
         side = "inside" if radius <= spacetime.outer_horizon_radius else "outside"
+        sheet_note = (
+            f", blue sheet B = {amplification:.1f}"
+            if amplification > 1.001
+            else ""
+        )
         print(
             f"frame {index}: tau = {tau:.3f} M, r = {radius:.3f} M "
-            f"({side}), remaining {total - tau:.3f} M -> {path}"
+            f"({side}){sheet_note}, remaining {total - tau:.3f} M "
+            f"-> {path}"
         )
 
 

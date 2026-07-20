@@ -45,6 +45,14 @@ uniform int u_background_mode;
 // sky), and terminate near the singularity instead.
 uniform int u_interior_mode;
 uniform float u_interior_stop;
+// Blue-sheet amplification of received external radiation for the
+// realistic journey through a spinning hole (Poisson-Israel mass
+// inflation; Hamilton-Avelino arXiv:0811.1926): B multiplies every
+// external shift; terminated rays render the sheet itself. Both are
+// zero-cost identity outside that regime.
+uniform float u_bluesheet_amp;
+uniform float u_sheet_radiance;
+uniform float u_bluesheet_white;
 uniform vec4 u_tetrad_time;
 uniform vec4 u_tetrad_forward;
 uniform vec4 u_tetrad_right;
@@ -362,10 +370,40 @@ void main() {
         Geometry g = evaluate_geometry(pos);
         float lp = -P_T + dot(g.l, p);
         dx_final = normalize(p - 2.0 * g.h * lp * g.l);
-        frag_color = vec4(background_color(dx_final), 1.0);
+        vec3 sky = background_color(dx_final);
+        if (u_interior_mode == 1) {
+            // Covariant sky shift g = B / E with unit camera
+            // frequency: intensity scales as g^4, and the tint
+            // slides toward blue for g > 1 and red for g < 1.
+            float g_sky = u_bluesheet_amp / max(P_T, 1e-6);
+            float gain = clamp(
+                g_sky * g_sky * g_sky * g_sky, 0.0, 4.0e4
+            );
+            float slide = clamp(
+                0.35 * log(max(g_sky, 1e-6)), -0.6, 0.6
+            );
+            vec3 tint = normalize(
+                vec3(1.0 - slide, 1.0, 1.0 + slide)
+            ) * 1.732;
+            sky = sky * gain * tint;
+        }
+        frag_color = vec4(sky, 1.0);
+    } else if (status == 1 && u_sheet_radiance > 0.0) {
+        // The blue sheet: rays ending on the inner-horizon terminal
+        // surface look into the infalling radiation pileup.
+        frag_color = vec4(
+            u_sheet_radiance * vec3(0.62, 0.78, 1.0), 1.0
+        );
     } else {
         // Captured rays and step-budget rays: the latter hug the photon
         // shell, where black is the visually correct limit.
         frag_color = vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    if (u_bluesheet_white > 0.0) {
+        frag_color.rgb = mix(
+            frag_color.rgb,
+            vec3(0.90, 0.95, 1.0),
+            u_bluesheet_white
+        );
     }
 }

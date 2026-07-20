@@ -186,6 +186,13 @@ proper time on the rain (free-fall) trajectory. Inside:
 - The light-cone overlay draws the river-model inflow: inside, both
   cone edges point inward.
 - The reset camera button (or R) is the only way out.
+- In realistic mode the approach to the inner horizon of a spinning
+  hole now renders the blue sheet quantitatively: the whole external
+  sky and the disk blueshift and brighten as B = x_match/x while the
+  panel reads out the amplification, the wall ahead glows blue-white,
+  and the final moments white out as the radiation bath overwhelms
+  any adapted exposure. Idealized mode stays dark there, as eternal
+  vacuum Kerr should.
 - For a spinning hole the panel offers two journey modes past the
   inner (Cauchy) horizon. Realistic (default): the journey ends
   there, where the infinitely blueshifted blue sheet terminates any

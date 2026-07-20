@@ -18,6 +18,10 @@ from imgui_bundle import imgui
 
 import math
 
+import numpy
+
+from ..emission.bluesheet import blueshift_amplification
+from ..kerr import KerrSpacetime
 from .fly_camera import FlyCamera
 from .settings import BackgroundMode, QualityPreset, RenderSettings
 
@@ -89,6 +93,23 @@ class SettingsPanel:
                 max(0.0, 1.0 - settings.spin * settings.spin)
             )
             if (
+                settings.interior_journey == "realistic"
+                and inner > 1e-9
+                and not infall.terminated()
+            ):
+                amplification = float(
+                    blueshift_amplification(
+                        KerrSpacetime(spin=settings.spin),
+                        numpy.array([infall.radius]),
+                    )[0]
+                )
+                if amplification > 1.001:
+                    imgui.text_colored(
+                        imgui.ImVec4(0.5, 0.85, 1.0, 1.0),
+                        "blue sheet amplification: "
+                        f"{amplification:6.1f} x",
+                    )
+            if (
                 settings.interior_journey == "idealized"
                 and inner > 0.0
                 and infall.radius < inner
@@ -104,6 +125,15 @@ class SettingsPanel:
                         imgui.ImVec4(1.0, 0.2, 0.2, 1.0),
                         "chart boundary: ring plane or Cauchy "
                         "horizon exit",
+                    )
+                elif (
+                    settings.interior_journey == "realistic"
+                    and inner > 1e-9
+                ):
+                    imgui.text_colored(
+                        imgui.ImVec4(0.7, 0.9, 1.0, 1.0),
+                        "the blue sheet: infalling radiation "
+                        "blueshifted beyond survival",
                     )
                 else:
                     imgui.text_colored(
