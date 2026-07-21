@@ -813,3 +813,65 @@ amplification monotonicity and matching continuity, zero-spin and
 idealized identity, display-law properties, offline flare-brightening
 with idealized darkness at the same position, and the GL flare
 progression.
+
+## Stage 7 implementation summary (delivered, offline only)
+
+Stage 7 replaces the Stage 6 whiteout with a rendered flythrough of
+the mass-inflation layer, using the spherical charged-Vaidya/Ori
+surrogate that makes tractable what Kerr's angular structure does not.
+
+The surrogate (blackhorizon/vaidya.py). An ingoing charged-Vaidya
+spacetime in the same Cartesian Kerr-Schild form as the rest of the
+package (g = eta + 2 H l l, H = m(v, r)/r - q^2/(2 r^2), v = t + r),
+so every tetrad and imaging tool applies unchanged. The charge q maps
+to Kerr's spin a by matching the horizon structure r_pm = M pm
+sqrt(M^2 - q^2); q = 0.9 reproduces the a = 0.9 horizons to 1e-5. A
+Price power-law tail m1(v) = M - dm (v_tail/v)^(p-1), p = 12, feeds
+the influx; an outgoing Ori null shell is integrated exactly from
+dR/dv = f1/2, and the Dray-'t Hooft-Redmount matching dm2/dv =
+L(v) f2/f1 is co-integrated along it for the inflating region-II mass
+m2(v). Because the metric is time dependent, photon energy is not
+conserved: vaidya_geodesic_rhs supplies the extended Hamiltonian flow
+with dp_t/dlambda = (dH/dt)(l . p)^2, verified against central
+differences to 1e-6, evolving p_t under the tail and reducing exactly
+to the conserved stationary flow when the fluxes vanish.
+
+Analytic anchors (tests/test_vaidya.py): the inner surface gravity
+kappa_minus = (r_plus - r_minus)/(2 r_minus^2) to 1e-12; the mass
+function jumps 1e4-fold across the shell in the strong-inflation
+regime; and the inflation e-folding rate equals kappa_minus to within
+5 percent, the classic Poisson-Israel-Ori result, once the v^(-p)
+Price prefactor is included in the fit (a naive pure-exponential fit
+misreads the polynomial modulation as a 20 percent error).
+
+The flythrough renderer (blackhorizon/offline/inflation.py). The
+camera rides the surrogate's ingoing rain worldline from between the
+horizons, through the shell, to the render horizon at the inner
+horizon; frames are sampled evenly in proper time, each building a
+frozen-slice tetrad and tracing past-directed rays with the full
+time-dependent flow. Escaped rays shade to a surrogate starfield;
+rays ending on the inflating layer glow blue-white by the local
+Misner-Sharp mass. The Stage 5 tetrad-fallback guard is carried over,
+so a diverged worldline sample can never crash a frame.
+
+Physics scope, stated honestly. A radial geodesic camera crosses the
+Cauchy horizon at finite, mild Misner-Sharp mass: the exponential
+inflation lives at late advanced time along the horizon, which a fast
+infaller outruns (strong inflation is an observer-who-lingers
+phenomenon). Stage 6 already renders what the infaller sees diverging
+(the blue-sheet flare); Stage 7 renders the geometry of the layer the
+infaller passes through. Both are correct and complementary. Rendering
+the violent late-CH region would require a non-geodesic (hovering)
+camera or a shell-comoving parameterization, a possible future
+refinement; the surrogate already contains that geometry (the mass
+function diverges along the shell), only the camera samples the mild
+early portion.
+
+Suite: 140 tests passing, adding horizon-structure and surface-gravity
+checks, the Hamiltonian-flow and static-limit and time-dependence
+tests, the mass-inflation e-folding and divergence and cross-shell
+jump tests, and a flythrough worldline-plus-frame integration test.
+This closes the planned Stage 1 through 7 arc: exterior disk and
+photon ring, the doomed plunge, the Schwarzschild interior, the Kerr
+interior with selectable journey modes, the quantitative blue sheet,
+and now a rendered passage through the mass-inflation layer.

@@ -322,6 +322,17 @@ void main() {
             status = 1;
             break;
         }
+        // Rays hovering just above the interior terminal surface with
+        // firmly growing momentum are already on it (the emissive
+        // blue sheet); capturing them early avoids burning the whole
+        // step budget on the asymptotic crawl, which is what dropped
+        // the flare phase to interactive-unfriendly frame rates.
+        if (u_interior_mode == 1
+            && r <= capture_radius * 1.002
+            && dot(p, p) > 2500.0) {
+            status = 1;
+            break;
+        }
         if (r >= u_escape_radius) {
             status = 2;
             break;

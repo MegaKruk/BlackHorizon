@@ -221,3 +221,32 @@ Offline, render a maximum-fidelity plunge:
 Presets: --preset rain (E = 1, default), maximal (E = 0, the longest
 possible interior life), fast --energy 1.5. Views: --look outward
 (the shrinking sky), inward (the darkness ahead), side (disk and sky).
+
+## Stage 7: through the mass-inflation layer (offline only)
+
+Where the realistic journey ends at the blue sheet, Stage 7 continues
+through it, rendering the mass-inflation layer with a spherical
+charged-Vaidya/Ori surrogate (the model that makes tractable what
+Kerr's rotation does not). It is offline only: the metric is time
+dependent, so each ray carries its own evolving energy.
+
+    python -m blackhorizon.offline.inflation --frames 10 --width 640 \
+        --height 400 --look side --output-dir inflation_frames
+    python -m blackhorizon.offline.video --encode-frames \
+        inflation_frames --fps 6 --output inflation.mp4
+
+The camera falls from between the horizons through the outgoing shell
+to the inner horizon; the console logs the local Misner-Sharp
+(quasilocal) mass per frame, which is the inflating diagnostic. The
+charge models the Kerr spin: --charge 0.9 matches an a = 0.9 hole.
+Views: --look side (sky and wall), outward (the shrinking sky),
+inward (into the wall). The surrogate is exact charged-Vaidya, so the
+inner surface gravity, the shell trajectory, and the Poisson-Israel-
+Ori inflation e-folding are all physically calibrated.
+
+Note on physics: a freely falling camera crosses the Cauchy horizon
+at finite, mild quasilocal mass and renders the layer's geometry; the
+exponential mass inflation itself lives at late advanced time along
+the horizon, which a fast infaller outruns. Stage 6's blue-sheet
+flare renders what the infaller sees diverging; Stage 7 renders the
+spacetime it passes through.

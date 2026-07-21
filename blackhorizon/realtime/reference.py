@@ -109,6 +109,13 @@ def trace_like_shader(
         captured = (radius <= capture_radius) | (
             momentum2 >= settings.momentum_bailout**2
         )
+        if interior_stop is not None:
+            # Mirror the shader: rays hovering just above the terminal
+            # surface with firmly growing momentum are on it already.
+            captured = captured | (
+                (radius <= capture_radius * 1.002)
+                & (momentum2 > 2500.0)
+            )
         escaped = ~captured & (radius >= escape_radius)
         status[idx[captured]] = capture_status
         status[idx[escaped]] = int(RayStatus.ESCAPED)
